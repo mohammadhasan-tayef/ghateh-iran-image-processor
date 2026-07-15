@@ -1,89 +1,94 @@
 # System Architecture
 
-This document is authoritative for system boundaries, module dependencies, runtime topology, and failure ownership. Specialized details live in the linked architecture documents.
+This document is authoritative for system boundaries, module dependencies, runtime topology, and failure ownership. Specialized behavior is authoritative in the linked documents.
 
 ## Style and Context
 
-The initial system is a modular monolith: one versioned backend codebase exposes REST use cases and supplies Celery task entry points, while a separate React client consumes the API. PostgreSQL is the business-state authority. Redis is disposable coordination infrastructure. Files remain in configured storage roots behind a `StorageBackend` port.
+The initial system is a modular monolith: one versioned Python backend exposes FastAPI REST use cases and Celery task entry points, while a React/TypeScript client consumes the API. PostgreSQL is the permanent business and session authority. Redis holds only queues, locks, cancellation hints, and temporary coordination. Files remain behind a `StorageBackend` addressed by configured root plus logical key.
 
-The local-network boundary is not trusted. Browser users authenticate to the API; only administrators configure host path mappings. External engines are invoked through adapters and cannot update domain state directly.
+The local network is not trusted. Users authenticate through named local accounts and PostgreSQL-backed server sessions. The primary UI is `fa-IR`/RTL; the API retains stable English technical codes and UTC timestamps. Only server/Docker configuration maps storage `config_key` values to container paths; administrators activate/label those existing keys and never submit host paths.
 
 See [system context](../diagrams/system-context.md) and [container architecture](../diagrams/container-architecture.md).
 
-## Initial Runtime Containers
+## Baseline Runtime
 
-| Container/process | Responsibility | Durable state |
-|---|---|---|
-| React/Vite web | Operational UI; no filesystem authority | None |
-| FastAPI API | Auth, validation, commands/queries, media authorization | PostgreSQL through repositories |
-| Image worker | Executes one processing run at a time per assigned slot | Artifacts through storage; facts through API/application services |
-| Maintenance/export worker | Scan chunks, reconciliation, previews, and exports | Same ports as image worker |
-| PostgreSQL | Permanent source of truth and audit history | Database volume |
-| Redis | Celery broker/result coordination, short locks, cancellation hints | None required for business recovery |
-| External storage | Immutable originals and versioned derived artifacts | Filesystem |
+The baseline is Windows 11 with Docker Desktop and WSL2, using Linux containers. Exact patch/image versions are pinned during Sprint 1 after official-image and compatibility verification.
+
+| Container/process | Direction/version baseline | Responsibility | Durable state |
+|---|---|---|---|
+| React web | TypeScript, Node.js 22 LTS build | Persian RTL operational UI; no filesystem authority | None |
+| FastAPI API | Python 3.12 | Sessions, authorization, validation, commands/queries, media authorization | PostgreSQL via repositories |
+| Image worker | Python 3.12, CPU required | Executes processing runs and candidate finalization | Artifacts via storage; facts in PostgreSQL |
+| Maintenance/export worker | Python 3.12 | Scan/hash/preview, reconciliation, and independent exports | Storage plus PostgreSQL |
+| PostgreSQL | 17 | Permanent source of truth, including UserSession | Database volume |
+| Redis | 7.x | Celery broker, short locks, cancellation hints, temporary state | No required business durability |
+| External storage | Server-configured mount | Immutable sources and versioned derived artifacts | Filesystem |
+
+NVIDIA GPU execution is optional and deferred. Native Windows services are not the supported baseline.
 
 ## Backend Modules
 
 | Module | Owns | May depend on |
 |---|---|---|
-| Identity/access | Users, roles, sessions, authorization policy | Shared kernel |
-| Storage catalog | Root aliases, safe keys, capabilities, availability | Shared kernel |
-| Ingestion/batches | Scan cursor, batch membership, registration | Storage catalog, assets |
-| Assets | Original identity and immutable metadata | Storage catalog |
-| Processing | Runs, candidate versions, presets, engine registry | Assets, storage catalog |
-| Review | Decisions and selected candidate | Processing, identity |
-| Export | Export jobs/items and final artifact records | Review, storage catalog |
-| Operations | Reconciliation, health, metrics, audit queries | Read-only access to module ports |
+| Identity/access | Users, fixed roles/permissions, UserSessions | Shared kernel |
+| Storage catalog | Configured root activation, safe keys, source observations/previews, availability | Shared kernel |
+| Ingestion/batches | Scan cursor, Batch/BatchImage registration and review-resolution roll-up | Storage catalog, assets |
+| Assets | ImageAsset and immutable SourceObservation identity | Storage catalog |
+| Processing | Runs, candidates, preset/SubjectMode/shadow snapshots, engine/model registry | Assets, storage catalog |
+| Review | Immutable decisions and selected candidate | Processing, identity |
+| Export | Independent jobs/items, naming snapshots, production RGB artifacts | Review, storage catalog |
+| Operations | Reconciliation, health, metrics, audit queries | Read-only module ports |
 
-Each module has presentation adapters, application commands/queries, domain types, and infrastructure adapters. Cross-module calls target explicit application/domain ports. Database models, Celery tasks, HTTP schemas, and engine objects do not cross into domain APIs.
+Image/Batch state never contains export state. Export reads an approved selected candidate through a Review port, creates its own durable job/item lifecycle, and does not transition BatchImage or Batch.
 
 ## Dependency Rules
 
-1. Domain code has no FastAPI, Celery, SQLAlchemy, Redis, OpenCV, PyTorch, or filesystem dependency.
-2. Application use cases depend on domain types and ports; they define transaction boundaries through a Unit of Work.
-3. Presentation and worker entry points validate input and invoke use cases; they contain no business transition logic.
-4. Infrastructure implements repositories, storage, queues, clocks, hashes, and engine adapters.
-5. Processing stages operate on a `PipelineContext` contract and return facts/artifact descriptors; persistence is orchestrated outside individual stages.
-6. Domain events are in-process facts persisted with the transaction/outbox; they do not imply event sourcing.
+1. Domain code has no FastAPI, Celery, SQLAlchemy, Redis, imaging library, or filesystem dependency.
+2. Application use cases depend on domain types/ports and define Unit of Work boundaries.
+3. HTTP and Celery entry points validate/translate only; state transition and permission logic remains in use cases.
+4. Infrastructure implements persistence, storage, queue, hashing, clock, password/session, and engine adapters.
+5. Processing stages use `PipelineContext`; no stage opens arbitrary paths or writes business state.
+6. Domain events are persisted facts/outbox inputs, not event sourcing.
 
 ## Critical Flows
 
-- **Create/scan batch:** a short transaction creates the batch; scan tasks persist cursor and registration chunks. Dispatch uses a transactional outbox so a commit and job intent cannot diverge.
-- **Process image:** claim a pending run atomically, read by storage key, produce temporary artifacts, finalize files, then commit artifact descriptors and the successful state. Orphans are reconciled.
-- **Review:** lock/select the current candidate, record an immutable decision, and transition the image in one transaction.
-- **Export:** reserve a destination, copy to a temporary sibling, verify checksum, atomically rename, then record completion. See [storage design](storage-design.md).
+- **Session:** login verifies Argon2id, rotates opaque token/CSRF metadata, stores hashes and expiry in UserSession, and sends a secure cookie. Logout, logout-all, password reset, user disable, and role change revoke/invalidate server state.
+- **Root activation:** admin submits a server-known config key/alias; backend resolves/probes the configured mount and records expected volume identity. Client paths never configure roots.
+- **Scan:** a short transaction creates Batch; scan tasks insert SourceObservations and BatchImages in chunks and stream hashes. Changed same-path content creates a new observation.
+- **Process:** claim a run, read its exact observation, execute non-generative stages, atomically finalize artifacts, then lock BatchImage briefly to allocate candidate `version_no` and commit candidate/run/image state.
+- **Review:** use SourcePreviewArtifact plus candidate/mask; lock BatchImage, record human decision, and select candidate. Automated scoring only orders work.
+- **Batch closure and controlled reopen:** reconcile member processing/review resolutions to a closed-cycle `review_completed` or `partially_completed`. Only the authorized `ReprocessBatchImage` use case may atomically create a run, move the image to `reprocess_queued`, reopen Batch to `processing`, increment `review_cycle` once, and record actor/reason/event. Reprocess commands while already `processing` retain state/cycle; `awaiting_review` returns to `processing` in the same cycle. Workers cannot reopen a Batch.
+- **Export:** snapshot naming policy, reserve approved candidate/destination, flatten to production PNG (2000 × 2000, 8-bit sRGB RGB, no alpha, white), atomically finalize, and update ExportItem/Job only.
 
 ## Scaling Seams
 
-- Stateless API instances share PostgreSQL and Redis.
-- Queue routing separates CPU, optional GPU, scan/maintenance, and export workloads.
-- Worker concurrency is configuration, not domain behavior.
-- `StorageBackend` capabilities support local disk first, then shared NAS and a future S3-compatible adapter.
-- Engine Strategy interfaces permit model replacement while preserving run/candidate records.
-- Transactional outbox dispatch and idempotent consumers permit additional processes without microservice decomposition.
+- Stateless APIs share PostgreSQL/Redis; sessions are not process-local.
+- Queue routing separates CPU, deferred GPU, scan/maintenance, and export.
+- StorageBackend supports local disk first, shared NAS later, and a future S3-compatible adapter.
+- Engine Strategy and immutable preset snapshots preserve run meaning across engine versions.
+- Outbox/idempotent consumers permit process scaling without microservices.
 
-These are seams, not a commitment to distributed deployment. A shared filesystem with consistent logical keys is required before adding worker hosts.
+Shared logical storage is required before adding worker hosts. Root-level user scoping is deferred; adding it requires an explicit relational/access-policy change.
 
 ## Failure Handling
 
 | Failure | Required behavior |
 |---|---|
-| Browser closes | No effect on durable work; client reconnects and queries state |
-| API restarts | In-flight DB transactions roll back; outbox dispatcher resumes |
-| Worker dies | Lease becomes stale; reconciliation retries within policy using the same run identity or creates an explicit retry run |
-| Redis is lost | Rebuild dispatch from PostgreSQL outbox/pending records; no business truth is inferred from Celery results |
-| Drive disconnects | Stop reads/writes, mark operations blocked/retryable, retain cursor and state, never convert to semantic failure automatically |
-| Database unavailable | Fail closed; do not process unrecorded work or finalize an untraceable export |
-| Artifact write succeeds before DB commit | Reconciler identifies temporary/orphan artifact by operation ID and safely deletes or adopts only after verification |
-| Model missing/corrupt | Reject dispatch to that engine, record configuration failure, and require verified installation |
+| Browser/API restarts | Server session remains valid unless expired/revoked; DB transaction rolls back and outbox resumes |
+| Worker dies | Stale lease reconciliation retries/fails the ProcessingRun within its recorded review cycle; stale candidate finalizer is fenced |
+| Redis is lost | Rebuild publish intent from PostgreSQL; no business/session truth is lost |
+| Configured mount missing | Root is unavailable; new scans/reads/writes are blocked with typed retryable status |
+| Drive disconnects during scan | Batch moves to `scan_paused`; cursor/observations persist |
+| Drive disconnects during processing | Run becomes retryable/blocked; BatchImage is not immediately processing-failed |
+| Drive disconnects during export | ExportItem retries/fails independently; approved BatchImage is unchanged |
+| Different volume reconnects | Root remains blocked until admin validates/rebinds expected identity; no automatic resume |
+| Database unavailable | Fail closed; do not create unrecorded work, sessions, candidates, decisions, or exports |
+| File write precedes DB commit | Reconcile by operation ID/checksum; adopt only after invariant verification |
+| Model missing/corrupt | Prevent dispatch and record typed configuration failure |
+| Task targets closed Batch without valid reopen | Reject/reconcile the task; do not create a run intent or change Batch/review cycle |
 
-## Technology Risks and Alternatives
+## Risks and References
 
-- BiRefNet hardware demand and Windows/PyTorch compatibility require an early spike. The Strategy contract permits fallback or a later validated engine.
-- Celery Windows worker support is operationally weaker than Linux. Run workers in Linux containers/WSL2 under the supported Windows deployment and test shutdown semantics.
-- External USB filesystems vary in atomicity, permissions, case behavior, and disconnect handling. Capability probes and recovery tests are release gates.
-- Docker Desktop licensing/availability may affect a site. A documented native-service deployment can be evaluated later without changing architecture.
+BiRefNet CPU demand and Windows/PyTorch compatibility require the planned benchmark. Linux containers mitigate native-Windows Celery limitations. External USB atomicity, reparse, case, Unicode, capacity, and disconnect behavior are release gates. A high image-quality score remains unable to guarantee semantic authenticity.
 
-## Authoritative References
-
-Domain ownership: [domain model](domain-model.md). Transitions: [state machines](state-machines.md). Persistence: [database design](database-design.md). Queue semantics: [worker and queue design](worker-and-queue-design.md). Security: [security](security.md).
+Domain: [domain model](domain-model.md). States: [state machines](state-machines.md). Storage: [storage design](storage-design.md). Persistence: [database design](database-design.md). Queues: [worker design](worker-and-queue-design.md). Security: [security](security.md).

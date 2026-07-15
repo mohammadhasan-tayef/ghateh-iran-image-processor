@@ -9,13 +9,13 @@ Automated dimensions, mask, background, and image-quality checks cannot prove th
 
 ## Decision
 
-For the first operational rollout, every final export must reference a candidate explicitly approved by an authorized human. Automated checks prioritize and warn but cannot create an approval. Bulk approval requires an explicit selected set and produces an individual decision per image. Rejection, reprocessing, approval revocation, and selecting an earlier version remain auditable.
+For the first operational rollout, every production ExportItem must reference a CandidateVersion explicitly approved by an authorized human for the same BatchImage. Automated checks may prioritize/sort and warn but cannot create an approval or production-final artifact. Bulk approval requires an explicit selected set and produces one human decision per image. Rejection, reprocessing, approval revocation, and selecting an earlier version remain auditable. Future auto-approval requires a new ADR plus benchmark/calibration and risk evidence; configuration alone cannot enable it.
 
 ## Consequences
 
 - Final output has clear human accountability and the safest authenticity policy.
 - Review throughput is an operational bottleneck that needs keyboard navigation, pagination, and measured staffing.
-- Future confidence-based auto-approval requires a new policy decision, calibrated evidence, risk acceptance, and state/API changes; it is not enabled by a threshold configuration alone.
+- Batch review resolution remains independent from export completion; one approved candidate may be used by multiple export jobs.
 - A high quality/confidence score is never labeled a semantic guarantee.
 
 ## Rejected Alternatives

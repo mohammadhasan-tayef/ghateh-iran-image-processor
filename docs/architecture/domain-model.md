@@ -1,82 +1,125 @@
 # Domain Model
 
-This document is authoritative for entity meaning, aggregates, invariants, relationships, and business transaction boundaries. All identifiers are UUIDs; timestamps are UTC instants.
+This document is authoritative for entity meaning, aggregate boundaries, invariants, relationships, and business transaction boundaries. All entity identifiers are UUIDs and persisted timestamps are UTC.
 
-## Entities
+## Identity and Authorization
+
+| Entity/value | Purpose | Key fields |
+|---|---|---|
+| `User` | Named local actor | id, username, display name, fixed role, password hash, status, session version |
+| `Role` | Fixed code-defined value, not a database-managed entity | `admin`, `operator`, `reviewer`, `auditor` |
+| `UserSession` | Revocable server-side browser session | id, user id, token hash, CSRF hash/metadata, created/last-seen/idle/absolute expiry, revoked at, session version, minimal client metadata, optional created-IP hash and user-agent summary |
+
+Permissions are fixed in application code and documented in [security](security.md). The MVP has no role/permission tables and no per-root user-access table. Root-level scoping is explicitly deferred.
+
+## Storage, Source, and Ingestion
 
 | Entity | Purpose | Key fields |
 |---|---|---|
-| `User` | Authenticated actor | id, username, display name, status, credential metadata |
-| `Role` | Named permission set | id, name, permissions |
-| `StorageRoot` | Admin-approved storage boundary | id, alias, backend type, host mapping reference, capabilities, enabled |
-| `Batch` | Ingestion and operational progress boundary | id, root id, source prefix, preset revision id, state, scan cursor, counts |
-| `ImageAsset` | Immutable identity and metadata for one source file | id, root id, source key, SHA-256, bytes, format, dimensions, observed metadata |
-| `BatchImage` | Membership of an asset in a batch | id, batch id, asset id, state, ordinal, selected candidate id |
-| `ProcessingRun` | One execution attempt against one batch image | id, engine/model/preset revisions, state, idempotency key, timings, error |
-| `CandidateVersion` | Immutable artifact produced by a successful run | id, run id, version number, image/mask/preview keys and checksums, QC facts |
-| `Preset` / `PresetRevision` | Named policy and immutable processing parameters | id/name; revision id, schema version, parameters, active dates |
-| `ReviewDecision` | Immutable human action on a candidate | id, batch image id, candidate id, actor id, decision, reason, timestamp |
-| `ExportJob` / `ExportItem` | Requested export and per-image result | job id/state; item id, candidate id, destination key, checksum, state |
-| `ProcessingEvent` | Append-only audit/diagnostic fact | id, subject type/id, event type, actor/task, correlation id, payload |
-| `ModelRegistryEntry` / `ModelInstallation` | Desired model identity and verified local availability | engine/name/version/license/source checksum; installation path reference/status/device compatibility |
+| `StorageRoot` | Admin activation of a server-configured mount | id, config key, alias, backend type, mode, volume identity, capabilities, health, enabled |
+| `ImageAsset` | Stable catalog identity for one logical source lineage | id, storage root id, normalized/current display key, created at |
+| `SourceObservation` | Immutable observation of source content at a path/time | id, asset/root ids, logical/display key, size, mtime ns, optional file identity, optional SHA-256, discovery/hash times, availability |
+| `SourcePreviewArtifact` | Regenerable display derivative of an observation | id, source observation id, storage key/checksum, width/height, MIME type, generation version, created at |
+| `Batch` | Ingestion, processing, and reopenable review-cycle boundary | id, root/source prefix, preset revision/snapshot, state, scan cursor, derived counts, review cycle, reopen metadata, updated at |
+| `BatchImage` | Exact source-observation membership and review lifecycle | id, batch id, source observation id, state, ordinal, selected candidate id, row version |
 
-`ProcessingRun` and `CandidateVersion` are separate. A run records an attempt, including failure or cancellation; a candidate exists only when immutable artifacts were finalized. This preserves failed-attempt history and allows one selected candidate among multiple attempts.
+Preliminary source sameness may use logical key plus size/mtime. Streamed SHA-256 is authoritative once available. Changed content at the same path creates a new SourceObservation; existing observations and BatchImage membership never retarget. Source preview generation applies only EXIF orientation normalization and display resize, is safely repeatable, and never replaces the source.
+
+## Processing, Review, and Export
+
+| Entity | Purpose | Key fields |
+|---|---|---|
+| `ProcessingRun` | One attempt against one BatchImage/source observation | id, batch image id, engine/model, preset snapshot including SubjectMode/shadow, state, idempotency, timings/error |
+| `CandidateVersion` | Immutable artifact from a processing run | UUID id, run/batch-image ids, output index, human-readable version no, image/mask keys/checksums, QC/provenance |
+| `Preset` / `PresetRevision` | Named policy and immutable validated parameters | id/name; revision id/number, schema version, parameters, created by/at |
+| `SubjectMode` | Fixed subject-selection policy value | `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, or `manual_subject_review_required` |
+| `ReviewDecision` | Immutable human action on a candidate | id, batch image/candidate/actor ids, decision, reason, supersession, timestamp |
+| `ExportJob` | Independent export request and immutable naming policy | id, root/batch optional, state, naming schema version/snapshot, requested by, counts |
+| `ExportItem` | Per-candidate result inside one export job | id, job/batch-image/candidate ids, destination key/checksum, state, lease/error |
+| `ProcessingEvent` | Append-only audit/diagnostic fact | id, subject, type, actor/task, correlation id, review cycle, schema/payload |
+| `ModelRegistryEntry` / `ModelInstallation` | Desired model and verified local installation | model identity/license/checksum; installation ref/status/device capabilities |
+
+`ProcessingRun` and `CandidateVersion` remain separate: failed/cancelled attempts may produce no candidate; a successful run produces one or more immutable candidates when a pipeline intentionally emits alternatives (the MVP normally emits one). Candidate UUID is identity. `output_index` identifies an idempotent output slot within a run, while `version_no` is display ordering scoped to BatchImage and is allocated under a short BatchImage row lock during finalization.
 
 ## Relationships
 
-- Users and roles are many-to-many.
-- A storage root owns many assets and batches; root deletion is prohibited while referenced.
-- A batch has many `BatchImage` memberships; an asset may appear in multiple batches.
-- A batch image has many runs and candidate versions, at most one selected candidate, and many review decisions.
-- A run targets exactly one batch image and references immutable preset, engine, and model revisions.
-- A candidate belongs to exactly one successful run.
-- An export item references exactly one human-approved candidate and one export job.
-- Events reference subjects polymorphically through validated subject type/id fields; they do not replace relational state.
+- A User has one fixed MVP role and many UserSessions; password reset/privilege change revokes or invalidates all sessions through `session_version`.
+- A StorageRoot is resolved by server `config_key`; it owns many ImageAssets, SourceObservations, Batches, previews, and artifacts.
+- An ImageAsset has many SourceObservations over time. A BatchImage references exactly one SourceObservation, and an observation may appear in multiple batches.
+- A Batch has many BatchImages, snapshots one immutable preset revision including SubjectMode, and starts with `review_cycle = 1`.
+- A BatchImage owns many ProcessingRuns, CandidateVersions, and ReviewDecisions and selects zero or one CandidateVersion from itself as the effective current selection.
+- A ProcessingRun targets one BatchImage and its exact observation; it snapshots preset/engine/model inputs.
+- A ProcessingRun produces zero or more CandidateVersions; failed/cancelled attempts normally produce zero and the MVP successful path normally produces one.
+- A SourceObservation may have multiple preview generations but at most one active preview per generation version.
+- An ExportJob has many ExportItems. Each item references one human-approved CandidateVersion belonging to the referenced BatchImage.
+- One approved candidate may participate in any number of independent ExportJobs without changing BatchImage state.
 
 See the [ER diagram](../diagrams/entity-relationship.md).
 
 ## Aggregate Boundaries and Invariants
 
+### User aggregate
+
+Owns User and session invalidation version. Username is unique. Role is one approved fixed value. Disabled users cannot authenticate. Session token/CSRF values are stored only as hashes; idle and absolute expiry are enforced server-side.
+
+### Storage/source aggregate
+
+StorageRoot references a server-known config key, never a client path. SourceObservation is immutable after hash completion except availability facts. A changed source creates a new observation. Preview artifacts are derived, independently replaceable by generation version, and cannot be treated as originals.
+
 ### Batch aggregate
 
-Owns `Batch` and scan progress, not all memberships in memory. Invariants: source key is contained by the root; preset revision is fixed at creation; terminal batches cannot accept newly discovered members except via an explicit resume/reopen operation; durable counters are derived/reconciled, not blindly incremented.
+Owns Batch scan progress and review-cycle closure, not all members in memory. When all non-cancelled members are review-resolved, Batch becomes `review_completed` if none failed/cancelled, otherwise `partially_completed`. These are closed-cycle states. They may reopen to `processing` only through `ReprocessBatchImage`; `cancelled` and `failed` remain permanently terminal for normal commands. Rejection is a valid review resolution, not a failure. Durable counters are derived/reconciled.
 
-### Batch image aggregate
+`review_cycle` starts at 1. Reopening a closed cycle increments it once and records `reopened_at`, `reopened_by_user_id`, and `reopen_reason`. A reprocess request while Batch is already `processing` joins that cycle without transition/increment; while `awaiting_review`, it moves Batch to `processing` without increment. Batch row locking makes concurrent reopen requests increment once. ProcessingRun, ReviewDecision, and ProcessingEvent metadata include the current cycle. Prior candidates/decisions and export history remain immutable.
 
-Owns one `BatchImage`, its transition, selected candidate, and review eligibility. Invariants: selected candidate belongs to that membership; only a successful finalized candidate can be reviewed; export readiness requires a valid human approval for that selected candidate; rejection clears export eligibility but not history.
+### BatchImage aggregate
 
-### Processing run aggregate
+Owns ingestion/processing/review state and selected candidate only. Core invariants:
 
-Owns run lifecycle and immutable candidate creation. One idempotency key identifies one intended attempt. A succeeded run has exactly one candidate; a failed/cancelled run has none. Candidate fields and artifacts never mutate after finalization.
+- membership stays bound to one SourceObservation;
+- selected candidate belongs to this BatchImage;
+- only a finalized candidate may be reviewed;
+- human approval selects a candidate from this BatchImage;
+- processing/export errors are distinct: export never moves BatchImage to `processing_failed`;
+- no export state exists in BatchImage.
+
+### ProcessingRun/Candidate finalization
+
+One run idempotency key identifies one intended attempt in one Batch review cycle. Candidate finalization locks BatchImage briefly, checks whether the run/output slot already has a candidate, allocates `next version_no` inside the transaction, inserts the UUID candidate, completes the run when all expected outputs finalize, and transitions the BatchImage. Concurrent reprocessing attempts may run, but each finalizer serializes allocation; late/stale lease or review-cycle completion is rejected. Gaps in version numbers are acceptable; collisions are not.
 
 ### Export aggregate
 
-Owns an export job and independently committed items. Every item references an approved selected candidate at reservation time. A destination key is reserved uniquely within its root. Partial completion is explicit.
+ExportJob owns independent item states and a `naming_policy_schema_version` plus immutable `naming_policy_snapshot` after transition from pending. The snapshot covers source/SKU naming, sanitization, Unicode, collisions, suffix/extension, maximum length, grouping, case, and duplicate outputs. Every item snapshots an approved candidate and destination reservation. Export success/failure never mutates BatchImage review state.
 
-### Storage root, identity, preset, and model aggregates
+## Relational Invariants
 
-Configuration updates create audit records. Preset revisions and model identities referenced by runs are immutable. Storage mappings and secrets are configuration references and are never returned through public DTOs.
+Core same-parent relationships are enforced in PostgreSQL, not only application code:
 
-## Cross-Aggregate Consistency
+- CandidateVersion has `UNIQUE (id, batch_image_id)`, `UNIQUE (processing_run_id, output_index)`, and `UNIQUE (batch_image_id, version_no)`.
+- ProcessingRun exposes `UNIQUE (id, batch_image_id)`.
+- CandidateVersion `(processing_run_id, batch_image_id)` references ProcessingRun `(id, batch_image_id)`.
+- BatchImage `(selected_candidate_id, id)` references CandidateVersion `(id, batch_image_id)` with a nullable selected id.
+- ReviewDecision `(candidate_version_id, batch_image_id)` references CandidateVersion `(id, batch_image_id)`.
+- ExportItem `(candidate_version_id, batch_image_id)` references CandidateVersion `(id, batch_image_id)`.
 
-Strong consistency is used for a command's decisive invariant: review plus selected candidate, run success plus candidate descriptor, and export destination reservation. Progress counters, batch roll-ups, event consumers, and dispatch are eventually consistent and repairable from authoritative rows.
-
-An outbox row is written in the same transaction as a command that requires asynchronous follow-up. Consumers use unique idempotency keys. No domain invariant relies on a Redis result or filesystem directory listing alone.
+These constraints mean `selected_candidate_id` can reference only a candidate owned by the same BatchImage, and ReviewDecision can reference only a same-parent candidate. ExportItem has the same parent constraint and must reference the effective approved selected candidate for that BatchImage; approval eligibility is additionally enforced transactionally because a relational FK alone cannot express the latest valid human decision.
 
 ## Transaction Boundaries
 
 | Use case | Transaction |
 |---|---|
-| Create batch | Batch row, initial event, outbox intent |
-| Register scan chunk | Asset upserts, membership inserts, cursor/checkpoint, events in a bounded chunk |
-| Claim run | Conditional run state/lease update and event |
-| Finish run | Verify finalized descriptor; create candidate; mark run succeeded; route membership; event/outbox |
-| Review candidate | Lock membership; insert decision; select/clear candidate; transition; event/outbox |
-| Create export | Job and item reservations in bounded chunks |
-| Finish export item | Conditional item transition, checksum/final key, event; roll-up later |
+| Authenticate/rotate/logout | Verify user; create/revoke UserSession; audit; update session version when global invalidation is required |
+| Activate root | Validate server config key; create/update root metadata and event; no client path persisted |
+| Register scan chunk | Upsert assets, insert immutable observations/memberships, checkpoint cursor, events/outbox in a bounded chunk |
+| Finish hash | Conditional observation SHA-256/hash time update after re-stat identity check |
+| Reprocess BatchImage | Lock Batch then BatchImage; validate actor/root/states/idempotency; if Batch is closed increment cycle and reopen; create run in current cycle; move image to reprocess_queued; clear effective selection; event/outbox; one atomic commit |
+| Finish processing run | Lock BatchImage; idempotency/lease check; allocate version; candidate/run/BatchImage/event/outbox commit |
+| Review candidate | Lock BatchImage; insert decision; select/clear candidate; transition; audit/outbox |
+| Create export | Job with naming snapshot plus item reservations in bounded chunks; BatchImage unchanged |
+| Finish export item | Conditional item state, checksum/key/event; job roll-up later; BatchImage unchanged |
 
-Filesystem writes cannot share an ACID transaction with PostgreSQL. Operation IDs, temporary names, checksums, and reconciliation close that gap; see [storage design](storage-design.md).
+Filesystem operations cannot join a PostgreSQL transaction. Operation IDs, temporary names, hashes, conditional finalization, and reconciliation close that gap; see [storage design](storage-design.md).
 
 ## JSONB Policy
 
-JSONB is allowed for versioned engine parameters, QC measurements/warnings, observed EXIF subsets, device capabilities, error details, and event context. Frequently queried identity, state, ownership, relationships, checksums, timestamps, and routing fields are typed columns. Every JSONB document has an application schema version and bounded size.
+JSONB is allowed for validated preset snapshots, naming-policy snapshots, minimal session client metadata, QC facts/warnings, observed EXIF subsets, capabilities, scan cursors, structured reopen reasons, error details, and event context. SubjectMode, review cycle, role, identity/state, ownership, relationships, checksums, timestamps, routing fields, and expiry fields are typed columns. Every JSONB document is schema-versioned and size-bounded.

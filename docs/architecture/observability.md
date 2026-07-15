@@ -4,7 +4,7 @@ This document defines local operational telemetry. PostgreSQL resources remain t
 
 ## Structured Logs
 
-API, dispatcher, worker, and maintenance processes emit structured JSON to stdout and rotated local files through deployment configuration. Common fields are timestamp UTC, severity, service/process, environment/build, event name, correlation ID, request/command/task/operation ID, actor ID where appropriate, aggregate type/id, batch/image/run/export IDs, state transition, duration, attempt, queue, engine/model, device, and normalized error category.
+API, dispatcher, worker, and maintenance processes emit structured JSON to stdout and rotated local files through deployment configuration. Common fields are timestamp UTC, severity, service/process, environment/build, event name, correlation ID, request/command/task/operation ID, actor/session id where appropriate, aggregate type/id, batch/BatchImage/source-observation/run/export IDs, `review_cycle`, state transition, duration, attempt, queue, engine/model, device, and normalized error category. Session identifiers are internal UUIDs only; cookie, token, CSRF, IP, and raw user-agent values are never logged.
 
 Do not log image bytes, credentials/tokens, database URLs, host absolute paths, unrestricted logical keys, raw EXIF, or full exception payloads containing them. Development stack traces are not client responses. Log sampling must never suppress security events, state transitions, terminal failures, review decisions, or exports.
 
@@ -14,7 +14,7 @@ The edge accepts a valid correlation ID or creates one and propagates it through
 
 ## Stage Telemetry
 
-Each pipeline stage records queue wait, read/decode, inference, refinement, correction, compose, encode, QC, artifact write, and database-finalization durations; input/output dimensions/bytes; peak-memory estimate where obtainable; engine/model/device; and typed warnings. High-cardinality IDs belong in logs/traces, not metric labels.
+Each pipeline stage records queue wait, source-observation verification, read/decode, inference, refinement, correction, optional deterministic shadow, compose, encode, QC, artifact write, and database-finalization durations; input/output dimensions/bytes; peak-memory estimate where obtainable; engine/model/device; and typed warnings. High-cardinality IDs belong in logs/traces, not metric labels.
 
 ## Metrics
 
@@ -23,16 +23,19 @@ Each pipeline stage records queue wait, read/decode, inference, refinement, corr
 - Redis availability, queue depth/oldest age, publish failures
 - Workers online/busy, claims, retries, stale leases, task duration, process recycling
 - Batch scan rate, pending/processing/review/failure counts, oldest work age
+- Batch approved/rejected/unresolved/processing-failed/cancelled counts and independent exported-at-least-once count
+- Batch reopen count, current review cycle, reopen actor/reason category, rejected stale-cycle tasks, and oldest open-cycle age
 - Pipeline stage latency, engine failure/warning rate, CPU/RAM/GPU memory/utilization where supported
 - Root availability, read/write latency, free bytes, disconnects, partial/orphan files
 - Review queue age, decisions/hour, rejection/reprocess reasons; never use as employee performance scoring without policy
 - Export throughput, collision/failure count, verification latency
+- Session login success/failure, active/revoked/expired counts, CSRF rejection, and global invalidation events without secret/cardinality-heavy labels
 
 Quality measurement distributions are versioned by preset/model and must not be mixed across incompatible revisions.
 
 ## Failure Categories
 
-Stable top-level categories are `validation`, `authorization`, `path_security`, `source_unavailable`, `source_changed`, `unsupported_media`, `decode_corrupt`, `model_unavailable`, `engine_failure`, `resource_exhausted`, `quality_gate`, `database`, `redis_dispatch`, `artifact_io`, `destination_collision`, `cancelled`, and `internal`. Each identifies retryability and operator guidance. Raw exceptions are mapped once at subsystem boundaries.
+Stable top-level categories are `authentication`, `session_expired`, `csrf`, `validation`, `authorization`, `path_security`, `source_unavailable`, `source_changed`, `volume_identity_mismatch`, `unsupported_media`, `decode_corrupt`, `model_unavailable`, `engine_failure`, `resource_exhausted`, `quality_gate`, `database`, `redis_dispatch`, `artifact_io`, `destination_collision`, `cancelled`, and `internal`. Each identifies retryability and operator guidance. Raw exceptions are mapped once at subsystem boundaries.
 
 ## Local Monitoring and Alerts
 

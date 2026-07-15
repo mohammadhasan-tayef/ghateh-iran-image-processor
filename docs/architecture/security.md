@@ -1,57 +1,79 @@
 # Security
 
-This document is authoritative for the initial threat model and required controls. “Local network” is not a security boundary: compromised clients, curious users, malware, and accidental misconfiguration remain credible.
+This document is authoritative for the initial threat model, authentication, fixed-role authorization, storage/media controls, and audit requirements. A local network is not a trust boundary.
 
-## Assets and Threats
+## Threats and Protected Assets
 
-Protected assets include original product images, approved outputs, credentials, absolute root mappings, model weights, audit records, and host resources. Principal threats are unauthorized browsing/export, path traversal or junction escape, malicious/corrupt image decompression, credential theft, CSRF/session abuse, overly broad CORS, model/supply-chain tampering, command injection, denial of service through batches/files, audit alteration, and cross-user action confusion.
+Protected assets include immutable source photos, approved/exported images, account/session/CSRF secrets, server mount mappings, models, naming/preset snapshots, review decisions, and audit records. Threats include unauthorized access/export, session theft/fixation, CSRF, credential guessing, path/reparse escape, malicious image decode, Unicode/case collisions, model/supply-chain tampering, resource exhaustion, and audit alteration.
 
-Public internet exposure is unsupported. Network/firewall configuration limits access to approved LAN segments; PostgreSQL and Redis are not exposed to clients.
+Public internet exposure is unsupported. Firewalls limit approved LAN access; PostgreSQL/Redis are not client-accessible.
 
-## Authentication and Sessions
+## Authentication Decision
 
-The first implementation uses named accounts with a modern password hash (Argon2id using reviewed parameters) and server-managed sessions, unless a site identity provider is selected before Sprint 1. Session identifiers are random, rotated at login/privilege change, stored hashed server-side, and delivered in `Secure` where TLS is used, `HttpOnly`, `SameSite` cookies. State-changing browser requests require CSRF protection. Login is rate limited and audited; default credentials are forbidden.
+MVP authentication is named local accounts, Argon2id password hashes, PostgreSQL-backed server-side UserSessions, an opaque secure cookie, and CSRF protection. Browser JWT and OAuth are excluded.
 
-TLS is recommended even on LAN and required if credentials cross an untrusted segment. A deployment-specific certificate approach remains to be chosen.
+On successful login the server rotates a cryptographically random session token, stores only `token_hash`, stores hashed/equivalent CSRF metadata, and sends the token in an `HttpOnly` cookie. The cookie uses a reviewed `SameSite` policy (default `Lax` unless deployment/testing proves `Strict` compatible), a narrow Path, and `Secure` in production. TLS is required for production credential/session transport; local development exceptions are explicit.
 
-## Authorization
+UserSession stores UUID id/user id, token/CSRF hashes, created/last-seen times, idle/absolute expiry, optional revocation, copied session version, minimal bounded client metadata, optional IP hash, and summarized user agent. Avoid raw IP/user-agent retention unless required.
 
-Permissions are checked in application use cases, not only UI/routes. Proposed permissions separate root/model/user administration, batch operation, review, bulk review, approval revocation, export, and audit read. Resource checks prevent access to a batch/root outside the actor's scope. Bulk actions authorize every item and return per-item results. Worker identities have only task-specific database/storage capabilities.
+Required behavior:
 
-## Filesystem and Media Controls
+- enforce idle and non-extendable absolute timeout server-side;
+- update `last_seen_at` at a throttled interval, not every request;
+- revoke current session on logout and clear cookie;
+- support logout-all and individual session revocation;
+- rotate after login and privilege changes;
+- increment User `session_version`/revoke all sessions after password reset, role/status change, or security response;
+- reject disabled users, stale session versions, expiry, revoked sessions, and missing/invalid CSRF on state changes;
+- rate-limit/audit authentication and session management without logging tokens.
 
-- Accept only root UUID and relative logical key; apply all containment and reparse-point rules in [storage design](storage-design.md).
-- Mount original locations read-only when operationally possible and separate derived write permissions.
-- Run workers as non-admin users; never invoke shell commands with filenames.
-- Decode by file signature in isolated worker processes with byte, pixel, dimension, frame, time, and memory limits; strip unsafe metadata from outputs.
-- Reject archives and nested containers from image ingestion. Browser upload, if later enabled, writes to quarantine with randomized names before validation.
-- Media routes reauthorize each object, send `nosniff`, constrained content types, CSP-compatible headers, and sanitized filenames. No directory is exposed as unrestricted static content.
+See [ADR 0009](../adr/0009-server-side-session-authentication.md).
 
-## Secrets and Configuration
+## Fixed Roles and Permission Matrix
 
-Secrets live outside Git and images in environment/secret files with restricted permissions or an approved local secret facility. `.env` files are development-only and ignored. Logs and errors redact passwords, session tokens, database URLs, host absolute paths, and sensitive EXIF. Rotate database, Redis, session-signing, and admin credentials with documented procedures.
+Permissions are fixed in application code. No UI/API/database table edits role permissions.
 
-Model weights and dependencies are installed from approved sources, pinned by version/checksum, scanned according to site policy, and verified before activation. Never deserialize untrusted pickle-based model/input content; PyTorch model formats and loading modes require a focused review.
+| Capability | admin | operator | reviewer | auditor |
+|---|:---:|:---:|:---:|:---:|
+| Manage users/sessions | Yes | No | No | No |
+| Activate/label configured roots | Yes | No | No | No |
+| Browse enabled roots | Yes | Yes | No | Read-only batch references only |
+| Manage presets/models | Yes | No | No | Read-only history |
+| Create/start/pause/cancel batches | Yes | Yes | No | No |
+| View batches/results | Yes | Yes | Review-scoped | Yes, read-only |
+| Request reprocessing | Yes | Yes | Yes | No |
+| Approve/reject/select candidate | Yes | No | Yes | No |
+| Create/cancel/retry exports | Yes | No | No | No |
+| View export/audit history | Yes | Own operational scope | Review-related history | Yes, read-only |
 
-## Web and API Controls
+Every permission is enforced in application use cases and per resource, not just UI/routes. The MVP deliberately defers root-level per-user scoping; admin/operator access all enabled roots consistent with their capabilities. Adding `UserStorageRootAccess` requires a later decision. Worker identities receive only task-specific DB/mount privileges.
 
-- CORS allowlists exact configured UI origins; no wildcard with credentials.
-- CSP restricts scripts/connect/media; frame ancestors are denied; security headers are enabled.
-- Validate request schemas, enum/state commands, pagination bounds, and idempotency payload hashes.
-- Rate/size/concurrency limits cover login, listing, scan, hashing, processing, preview generation, review bulk commands, and export.
-- Errors use correlation IDs and stable categories without stack traces or host paths.
-- Database queries are parameterized through SQLAlchemy; JSON fields are schema-validated and size-bounded.
+## Storage Root and Path Controls
 
-## Infrastructure
+Server/Docker configuration maps `config_key` to container path/mode. Admin activation sends only config key, alias, and enabled state. Unknown keys are rejected. Host paths are never returned or logged to clients. A missing mount is unavailable; a changed volume identity blocks automatic resume until admin verification. Drive-letter change is handled in server configuration.
 
-PostgreSQL uses authenticated encrypted connections where crossing process/host trust boundaries, least-privilege roles, backups, and no client-network listener. Redis is private, authenticated where supported, memory-bounded, and disposable. Containers use pinned images, non-root users, read-only filesystems where possible, explicit volumes, resource limits, and no Docker socket. Host drive mappings are minimal.
+All operations accept root id plus relative path/logical key and apply the containment/reparse/Unicode rules in [storage design](storage-design.md). Original mounts are read-only where possible. Workers run non-root and never construct shell commands from filenames.
 
-## Auditability and Response
+## Image and Media Controls
 
-Authentication, configuration, lifecycle, review, export, authorization denial, and administrative retention actions record actor/task identity, UTC time, subject, correlation ID, prior/new state, and reason without secrets. Application users cannot update/delete audit events. Database administrators remain a trusted role; backups and restricted DB access mitigate tampering rather than claiming cryptographic immutability.
+- Decode signature-verified regular files in isolated/bounded worker processes with byte/pixel/frame/time/RAM limits.
+- Reject archives/nested containers; quarantine any later browser upload before validation.
+- SourcePreviewArtifact is the normal raw-side review media. It permits only EXIF orientation and resize, has an opaque authorized route, and never exposes the original path.
+- Candidate/mask/export media routes authorize each object, set `nosniff`, constrained types/CSP headers, and safe Unicode Content-Disposition.
+- No storage directory is served as unrestricted static content; original download remains disabled by default.
 
-On suspected compromise, administrators can disable accounts/roots, stop dispatch, preserve logs/database/artifacts, rotate secrets, verify model/checksums, and reconcile exports. Exact incident and retention policies remain operational decisions.
+## Web, Localization, and API Controls
 
-## Security Release Gates
+CORS allowlists exact origins and never combines wildcard with credentials. CSP restricts scripts/connect/media and denies framing. Backend error codes are stable English identifiers without secrets/paths; the `fa-IR` frontend maps them to Persian messages. Technical values render LTR in the RTL UI. Validate schemas, SubjectMode/shadow/naming bounds, cursor sizes, state commands, and idempotency hashes. Parameterized SQL and bounded schema-versioned JSONB are mandatory.
 
-Threat-model review, path containment/reparse test suite on Windows, decompression-bomb tests, authorization matrix tests, CSRF/CORS checks, dependency/model provenance verification, secret scan, container privilege review, and backup restore are required before operational use.
+## Secrets, Dependencies, and Infrastructure
+
+Secrets remain outside Git/images in restricted files or approved local secret storage. Logs redact password/session/CSRF values, DB URLs, mount paths, and sensitive EXIF. Dependencies/container images/model weights are pinned and verified by source/version/checksum; avoid unsafe untrusted pickle deserialization.
+
+Windows 11/Docker Desktop/WSL2 runs Linux containers as non-root with explicit mounts, limits, health checks, no Docker socket, and minimal capabilities. PostgreSQL 17 and Redis 7.x remain internal; exact patches/images are selected and pinned in Sprint 1.
+
+## Audit and Security Gates
+
+Audit login outcome, session create/revoke/expiry/global invalidation, user/role/status changes, configured-root activation/identity confirmation, lifecycle/review/export, authorization denials, model/preset/naming changes, and retention actions with UTC time, subject, actor/task, correlation, prior/new state, and reason—never secret values.
+
+Release gates: Argon2id/session/CSRF review; fixation/rotation/idle/absolute/logout-all/password-reset tests; fixed permission matrix tests; Windows containment/reparse/Unicode tests; decode bombs; CORS/CSP; secret/model/dependency scans; container privileges; and backup restore.

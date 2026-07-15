@@ -1,87 +1,120 @@
 # REST API Design
 
-This document is authoritative for public REST resources and transport conventions. The API is rooted at `/api/v1`; JSON uses UTF-8, `snake_case`, ISO 8601 UTC timestamps, UUID strings, and explicit enum values. Host absolute paths never appear in requests, responses, logs intended for users, or media URLs.
+This document is authoritative for public REST resources and transport conventions. The API is rooted at `/api/v1`; JSON is UTF-8 `snake_case`, UUID strings, stable English enum/error codes, and ISO 8601 UTC timestamps. The `fa-IR` frontend maps error codes to Persian messages and renders timestamps in the user's configured timezone. Host/container absolute paths never cross the API.
 
-## Resources and Endpoints
+## Session and Identity Endpoints
 
-### Session and identity
+- `POST /session` — authenticate named local account, rotate a new server session/cookie, issue CSRF metadata; rate limited
+- `DELETE /session` — revoke current session and clear cookie
+- `GET /sessions` — list current user's active session summaries without tokens
+- `DELETE /sessions` — logout/revoke all sessions for current user and advance session version
+- `DELETE /sessions/{id}` — revoke one owned session; admin may revoke another user's session through an admin-scoped route
+- `GET /me` — actor, fixed role, derived permissions, locale/timezone preferences
+- `GET|POST /users`, `GET|PATCH /users/{id}` — admin user lifecycle; password reset/role/status change revokes sessions
+- `GET /roles` — read-only fixed role/permission descriptions; no mutation endpoint
 
-- `POST /session` — authenticate; rate limited
-- `DELETE /session` — sign out/revoke current session
-- `GET /me` — actor, roles, permissions
-- `GET|POST /users`, `GET|PATCH /users/{id}` — admin lifecycle
-- `GET /roles` — role catalog
+Browser authentication is PostgreSQL-backed server sessions with a random opaque cookie, not JWT. State-changing cookie-authenticated requests require CSRF proof. Session token rotation occurs after login and privilege changes; idle and absolute expiry are enforced server-side.
 
-### Storage and models
+## Storage and Models
 
-- `GET /storage-roots` — authorized aliases, availability, capabilities; never mappings
-- `POST /storage-roots` — admin creates a root referencing server-side configuration
-- `GET|PATCH /storage-roots/{id}` — status/configuration metadata
-- `GET /storage-roots/{id}/entries?relative_path=...&cursor=...` — bounded directory listing
-- `POST /storage-roots/{id}/scan-preview` — bounded counts/sample, not full ingestion
-- `GET /models`, `GET /models/{id}` — registry/install health
-- `POST /models/{id}/verify` — admin verification command
+- `GET /storage-roots` — role-authorized aliases, enabled/health/capabilities/config key; never mount mappings
+- `POST /storage-roots` — admin activates `{config_key, alias, enabled}` only; backend resolves a known server configuration entry
+- `GET|PATCH /storage-roots/{id}` — label/enabled metadata; config key changes require validation
+- `POST /storage-roots/{id}/verify` — probe mount and volume identity; explicit admin confirmation is required for identity change
+- `GET /storage-roots/{id}/entries?relative_path=...&cursor=...` — bounded safe listing
+- `POST /storage-roots/{id}/scan-preview` — bounded counts/sample
+- `GET /models`, `GET /models/{id}`, `POST /models/{id}/verify` — registry/install health
 
-### Batches and images
+Example activation request:
 
-- `POST /batches` — `{root_id, relative_path, preset_revision_id, name}`
-- `GET /batches`, `GET /batches/{id}` — paginated list/detail
+```json
+{
+  "config_key": "external_images",
+  "alias": "هارد تصاویر قطعه ایران",
+  "enabled": true
+}
+```
+
+Folder selection continues to submit only `root_id` and `relative_path`. A missing mount returns root health `unavailable` and blocks scan/process/export with a typed retryable response. A changed Windows drive mapping is corrected in server configuration, never through a client path. A different volume identity blocks automatic resume pending admin verification.
+
+## Presets, Batches, and Sources
+
+- `GET /presets`, `GET /presets/{id}/revisions` — immutable revision representations
+- `POST /presets`, `POST /presets/{id}/revisions` — admin-only validated parameters
+- `POST /batches` — `{root_id, relative_path, preset_revision_id, name}`; response includes preset snapshot/SubjectMode summary
+- `GET /batches`, `GET /batches/{id}` — pagination/detail with processing/review state plus derived approved/rejected/unresolved/failed/exported-at-least-once counts
 - `POST /batches/{id}/scan`, `/pause-scan`, `/resume-scan`, `/cancel`
-- `GET /batches/{id}/images` — cursor-paginated memberships with filters
-- `GET /batch-images/{id}` — source metadata, state, versions, effective review
-- `POST /batch-images/{id}/reprocess` — engine/preset selection and reason
+- `GET /batches/{id}/images` — cursor-paginated membership filters
+- `GET /batch-images/{id}` — exact SourceObservation, processing state, versions, effective review, export-history summary
+- `GET /source-observations/{id}` — authorized immutable observation/checksum/availability facts
+- `POST /batch-images/{id}/reprocess` — authorized `ReprocessBatchImage` command; may atomically reopen a closed Batch review cycle
 - `POST /batch-images/{id}/cancel`
 
-### Candidates and review
+Preset revision schema requires `subject_mode` from `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, or `manual_subject_review_required`, plus optional deterministic shadow fields: `shadow_enabled` (default false), `shadow_opacity`, `shadow_blur_ratio`, `shadow_offset_x`, `shadow_offset_y`, `shadow_color`, and `shadow_spread`. Server validation enforces bounded values and supported neutral colors; the ProcessingRun captures the validated snapshot. `manual_subject_review_required` still runs automatic segmentation but always routes its candidate to review. It does not imply an interactive mask/subject editor.
 
-- `GET /candidates/{id}` — provenance, QC, warnings, authorized media links
-- `GET /review-queue` — cursor pagination and stable filters/sort
-- `POST /batch-images/{id}/review-decisions` — approve/reject/reprocess/revoke with candidate and reason
-- `POST /review-decisions/bulk` — explicit item/candidate pairs; returns per-item outcome
+### Controlled reprocess contract
 
-### Exports and operations
+`POST /batch-images/{id}/reprocess` accepts a required reason plus an optional alternate `preset_revision_id` and/or segmentation engine choice. It requires `Idempotency-Key` and the appropriate current resource version. The application command—not a worker—locks Batch then BatchImage and validates authorization/state/storage. If Batch is `review_completed` or `partially_completed`, it first increments `review_cycle` once and reopens Batch to `processing`; it then creates the ProcessingRun in the resulting current cycle, moves the image to `reprocess_queued`, clears the effective selected candidate, and commits the audit event/outbox intent atomically. Existing candidates, decisions, and exports remain historical records.
 
-- `POST /export-jobs` — selected batch images/candidates and naming policy revision
-- `GET /export-jobs`, `GET /export-jobs/{id}`
+```json
+{
+  "batch_image_id": "UUID",
+  "batch_id": "UUID",
+  "processing_run_id": "UUID",
+  "batch_image_state": "reprocess_queued",
+  "batch_state": "processing",
+  "review_cycle": 2
+}
+```
+
+If Batch is already `processing`, the request joins its current cycle without transition/increment. If `awaiting_review`, it transitions to `processing` but retains the cycle. Concurrent requests serialize so only the first closed-cycle reopen increments. The same idempotency key and request returns the same run/response without another cycle increment. Stable error codes include `BATCH_NOT_REPROCESSABLE`, `BATCH_IMAGE_NOT_REPROCESSABLE`, `REPROCESS_ALREADY_REQUESTED`, `FORBIDDEN`, and `STORAGE_UNAVAILABLE`; the frontend maps them to Persian messages.
+
+## Candidates, Review, and Media
+
+- `GET /candidates/{id}` — provenance, SubjectMode, shadow settings, QC/warnings, authorized media links
+- `GET /review-queue` — cursor pagination and stable filters/sort; score may prioritize but never approve
+- `POST /batch-images/{id}/review-decisions` — approve/reject/reprocess/revoke/select candidate with reason where required
+- `POST /review-decisions/bulk` — explicit item/candidate pairs with per-item authorization/outcome
+- `GET /media/source-previews/{source_observation_id}` — display derivative only
+- `GET /media/candidates/{id}/image|mask|preview` — authorized candidate artifacts
+
+Review uses SourcePreviewArtifact by default instead of repeatedly streaming full-resolution originals. The preview exposes no path and contains only EXIF orientation normalization plus display resize. Direct original bytes are disabled by default and require a separate permission/policy route if later needed.
+
+The primary UI is Persian RTL. Technical values receive explicit LTR rendering. Review hotkeys are action-based and independent of direction. Unicode filenames in `Content-Disposition` use safe RFC-compatible encoding plus sanitized fallback.
+
+## Exports and Operations
+
+- `POST /export-jobs` — `{items, storage_root_id, naming_policy_schema_version, naming_policy_snapshot}`; every item names a BatchImage/candidate pair
+- `GET /export-jobs`, `GET /export-jobs/{id}`, `GET /export-jobs/{id}/items`
 - `POST /export-jobs/{id}/cancel`, `/retry-failed`
-- `GET /events` — authorized audit query
-- `GET /health/live`, `GET /health/ready` — process and dependency health
+- `GET /batch-images/{id}/exports` — independent history; does not alter image state
+- `GET /events`, `GET /health/live`, `GET /health/ready`
 
-## Commands, Responses, and Concurrency
+The naming snapshot validates source/SKU mode, sanitization, Unicode behavior, collision, suffix/`.png`, maximum filename length, grouping, case, and duplicate-output behavior. It becomes immutable once the job starts. Creating a job revalidates that every candidate belongs to and is currently human-approved for the supplied BatchImage. One approved candidate may appear in multiple jobs.
 
-Creation returns `201`; asynchronous commands return `202` with the authoritative resource and an operation link; successful idempotent repeats return the existing resource. Mutation requests include `Idempotency-Key` and, for state-sensitive operations, `If-Match` with a version/ETag. Server-side UUIDs are used unless a specific client command id is accepted.
+## Commands, Idempotency, and Concurrency
 
-Command responses do not promise task completion. Clients poll resources using backoff in MVP; optional Server-Sent Events may later deliver hints, with PostgreSQL-backed queries remaining authoritative.
+Creation returns `201`; accepted asynchronous commands return `202` with the authoritative resource. Mutations include `Idempotency-Key` and state-sensitive commands use `If-Match`. The same key/request hash returns the prior resource; reused key with different content is `409`. Candidate/export/reopen concurrency is governed by database locks and composite constraints, not client sequencing.
 
-## Pagination and Filtering
+Clients poll resources with backoff in MVP; optional SSE may provide hints but PostgreSQL queries remain authoritative. Batch review completion never waits for exports.
 
-Large collections use opaque cursor pagination: `?limit=50&cursor=...`, response `{items, next_cursor, has_more}`. Limits are capped. Cursors bind to canonical sort/filter and include a tie-breaker UUID. Offset pagination is reserved for small administrative catalogs. Filters use allowlisted fields such as state, batch, warnings, date range, engine, and assignee.
+## Pagination and Errors
 
-## Error Envelope
+Large collections use opaque cursors: `?limit=50&cursor=...` with `{items, next_cursor, has_more}`. Cursors bind to sort/filter and include UUID tie-breakers. Allowlisted filters include state, batch, warning, date, engine, reviewer, and export job.
 
 ```json
 {
   "error": {
     "code": "state_conflict",
-    "message": "The image is not reviewable in its current state.",
+    "message": "The resource is not valid for this operation.",
     "details": {"current_state": "processing"},
     "correlation_id": "UUID"
   }
 }
 ```
 
-Codes are stable and messages avoid host paths/secrets. Use `400` malformed semantics, `401` unauthenticated, `403` unauthorized, `404` absent/concealed, `409` state/idempotency/destination conflict, `413` upload/size limit, `415` unsupported media, `422` field validation, `429` throttling, `503` dependency/root unavailable, and `500` unexpected failure.
-
-## Idempotency
-
-The server stores actor, route/command type, key, canonical request hash, status, and response reference in PostgreSQL. The same key and hash returns the prior result; the same key with different content is `409`. Keys have a retention period longer than maximum command retry windows. Worker idempotency is separately defined in [worker and queue design](worker-and-queue-design.md).
-
-## Media Serving
-
-The UI requests opaque routes such as `GET /media/assets/{asset_id}/source`, `/media/candidates/{id}/image`, `/mask`, or `/preview`. The API authorizes each request, resolves storage internally, sets safe content headers, supports bounded ranges where appropriate, and streams without loading entire files. A deployment may use short-lived signed opaque tokens to an internal media proxy, but never exposes absolute paths or unrestricted static mounts.
-
-Original downloads are disabled by default; review receives a display representation unless permission/policy requires original bytes. Content disposition filenames are sanitized.
+Codes stay English and stable; `message` is not the primary localized UI copy. Use `400`, `401`, `403`, `404`, `409`, `413`, `415`, `422`, `429`, `503`, and `500` consistently. Errors never disclose mount paths, token/CSRF data, stack traces, or sensitive filename metadata.
 
 ## API Security
 
-Browser auth uses secure, HttpOnly, SameSite cookies plus CSRF protection, or another approved local identity mechanism documented before implementation. CORS is an explicit origin allowlist; credentials and wildcard origins are incompatible. Rate limits protect login, scans, model verification, bulk review, and exports. See [security](security.md).
+The opaque session cookie is `HttpOnly`, production `Secure`, and uses the reviewed SameSite policy; CSRF protects state changes. CORS is an exact origin allowlist. Fixed-role permission checks run in application use cases. Rate limits cover login, session operations, scans, model verification, bulk review, and export. See [security](security.md).

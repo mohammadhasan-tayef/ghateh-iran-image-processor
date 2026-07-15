@@ -1,6 +1,6 @@
 # State Machines
 
-Derived from the authoritative [state-machine specification](../architecture/state-machines.md). Terminal and exceptional details remain in that document.
+Derived from the authoritative [state-machine specification](../architecture/state-machines.md). Batch/BatchImage processing-review lifecycles are independent from export.
 
 ## Batch
 
@@ -11,50 +11,57 @@ stateDiagram-v2
     created --> cancelled
     scanning --> scan_paused
     scan_paused --> scanning
+    scan_paused --> cancelled
     scanning --> queued
-    scanning --> completed: accepted empty
+    scanning --> review_completed: zero members
     scanning --> failed
     scanning --> cancelled
     queued --> processing
     queued --> cancelled
     processing --> awaiting_review
-    processing --> partially_completed
-    processing --> failed
+    processing --> review_completed: all resolved; no failures/cancelled
+    processing --> partially_completed: resolved with failures/cancelled
+    processing --> failed: batch-level failure
     processing --> cancelled
     awaiting_review --> processing: reprocess
-    awaiting_review --> completed
+    awaiting_review --> review_completed
     awaiting_review --> partially_completed
+    awaiting_review --> cancelled
+    review_completed --> processing: explicit reprocess; cycle +1
+    partially_completed --> processing: explicit reprocess; cycle +1
 ```
 
-## Image Membership
+`review_completed` and `partially_completed` are closed but reopenable only through the authorized atomic reprocess command. Workers cannot take these transitions. `cancelled` and `failed` remain permanently terminal for normal operations.
+
+## BatchImage
 
 ```mermaid
 stateDiagram-v2
-    [*] --> registered
+    [*] --> discovered
+    discovered --> registered
+    discovered --> processing_failed
+    discovered --> cancelled
     registered --> queued
     registered --> cancelled
     queued --> processing
-    queued --> failed
+    queued --> processing_failed
     queued --> cancelled
-    processing --> needs_review
-    processing --> queued: transient retry
-    processing --> failed
+    processing --> queued: transient recovery
+    processing --> candidate_ready
+    processing --> processing_failed
     processing --> cancelled
+    candidate_ready --> needs_review
     needs_review --> human_approved
     needs_review --> rejected
     needs_review --> reprocess_queued
     rejected --> reprocess_queued
-    human_approved --> export_ready
     human_approved --> reprocess_queued
+    processing_failed --> reprocess_queued
     reprocess_queued --> processing
     reprocess_queued --> cancelled
-    export_ready --> exported
-    export_ready --> human_approved: release reservation
-    export_ready --> failed
-    failed --> reprocess_queued: explicit retry
 ```
 
-## Processing Run
+## ProcessingRun
 
 ```mermaid
 stateDiagram-v2
@@ -67,15 +74,29 @@ stateDiagram-v2
     running --> cancelled
 ```
 
-## Export Job
+## ExportJob
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending
+    pending --> running: freeze naming snapshot
+    pending --> cancelled
+    running --> completed
+    running --> partially_completed
+    running --> failed
+    running --> cancelled
+```
+
+## ExportItem
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending
     pending --> running
+    pending --> skipped
     pending --> cancelled
+    running --> pending: retry after reconciliation
     running --> completed
-    running --> partially_completed
     running --> failed
     running --> cancelled
 ```
