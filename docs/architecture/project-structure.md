@@ -57,19 +57,81 @@ Each business module may contain `domain/`, `application/`, `infrastructure/`, a
 
 `identity/` owns named users, fixed role policies, and PostgreSQL-backed UserSessions. `storage_catalog/` owns configured-root activation, SourceObservation, and SourcePreviewArtifact adapters. `ingestion/` owns Batch/BatchImage processing-review roll-up; `export/` owns independent ExportJob/ExportItem state and naming snapshots. `api/` composes routers and transport concerns; `workers/` exposes thin Celery entry points; `bootstrap/` is the composition root/factories; `shared/` contains only stable primitives such as IDs, time/result types, Unit of Work contracts, and cross-cutting errors—not miscellaneous business helpers.
 
-## Folder Responsibilities
+## Top-Level Folder Ownership
 
-- `backend/migrations`: Alembic revisions; no business decisions hidden solely in migrations.
-- `backend/tests/unit`: dependency-free domain/application tests.
-- `backend/tests/integration`: PostgreSQL/Redis/filesystem/engine integration.
-- `backend/tests/contract`: REST and adapter conformance, especially `StorageBackend` and segmentation engines.
-- `frontend/src/app`: composition, routing, providers, global error boundaries.
-- `frontend/src/features`: vertical UI features aligned with API resources (batches, review, exports, admin).
-- `frontend/src/i18n`: `fa-IR` translations, RTL direction configuration, stable English error-code mappings, timezone formatting, and LTR isolation helpers; font binaries are ordinary later application assets, not Sprint 0.1 files.
-- `frontend/src/shared`: design primitives and transport utilities without feature business rules.
-- `deploy`: deployment definitions and operator scripts, not application logic or secrets.
-- `docs`: authoritative specifications/decisions and derived diagrams.
-- `samples`: ignored local fixtures until licensing/storage policy exists.
+Ownership identifies the repository role accountable for maintaining a boundary. Allowed contents describe where later sprint work belongs; they do not authorize creating that work before its owning sprint.
+
+### `backend/`
+
+- **Purpose:** Own all backend implementation and backend-specific verification in future sprints.
+- **Repository Owner:** Backend maintainers, with the technical lead accountable for module-boundary enforcement.
+- **Allowed Contents:** The Python workspace and its versioned tooling manifest; `src/ghateh_processor/` modules; backend tests and fixtures; database migration definitions; API and worker entry points; backend-specific static configuration required to build or test the workspace.
+- **Forbidden Contents:** React/frontend code; deployment scripts or infrastructure manifests; runtime-generated data; model weights, previews, exports, or caches; secrets and credentials.
+- **Notes:** `backend/migrations/` contains Alembic revisions but must not hide business decisions solely in migrations. Unit, integration, contract, and fixture suites belong under `backend/tests/` when their implementation sprint begins.
+
+### `frontend/`
+
+- **Purpose:** Own the React application and frontend-specific verification in future sprints.
+- **Repository Owner:** Frontend maintainers, with the technical lead accountable for frontend feature boundaries.
+- **Allowed Contents:** React/TypeScript application source; frontend tests; versioned frontend build and package metadata; static UI assets; `fa-IR` translations, RTL configuration, error-code mappings, timezone formatting, and LTR-isolation helpers.
+- **Forbidden Contents:** Backend Python code; server-side domain or persistence logic; database migrations; deployment scripts or infrastructure manifests; runtime-generated data; secrets and credentials.
+- **Notes:** Application composition belongs in `frontend/src/app/`; resource-aligned UI belongs in `frontend/src/features/`; shared design and transport primitives must not contain feature business rules. Frontend tests belong under `frontend/tests/` when their implementation sprint begins.
+
+### `deploy/`
+
+- **Purpose:** Own deployment-related assets only.
+- **Repository Owner:** Platform and operations maintainers.
+- **Allowed Contents:** Docker definitions; Compose definitions; infrastructure manifests; deployment templates; and deployment scripts under `deploy/scripts/`, including container entrypoints, deployment-time migration execution, deployment health probes, backup and restore execution, operator automation, and install, start, stop, upgrade, and rollback scripts.
+- **Forbidden Contents:** Backend or frontend application code; repository-level lint/format/verify utilities; runtime-generated data; model weights; committed secrets or credentials; user-specific deployment overrides.
+- **Notes:** `backend/migrations/` owns Alembic migration definitions; `deploy/scripts/` may own deployment-time invocation of those migrations. Business decisions must never exist only in deployment scripts. Any script that operates a deployed environment belongs under `deploy/scripts/`, not root `scripts/`.
+
+### `config/`
+
+- **Purpose:** Own version-controlled project configuration shared by the repository or its workspaces.
+- **Repository Owner:** Technical lead and developer-experience maintainers, with component owners reviewing component-specific configuration.
+- **Allowed Contents:** Non-secret configuration templates; checked-in tool configuration; schemas; safe defaults; documented example values that are valid to publish.
+- **Forbidden Contents:** Secrets; credentials; generated files; runtime state; user-specific configuration; machine-local paths; active environment files containing private values.
+- **Notes:** Sensitive or deployment-local values remain outside Git. A committed example must contain placeholders or safe development defaults only. Shared repository/workspace configuration belongs under `config/`; deployment-specific manifests, templates, and configuration belong under `deploy/`.
+
+### `data/`
+
+- **Purpose:** Provide a local location for runtime-generated or externally installed data.
+- **Repository Owner:** Operations maintainers own lifecycle policy; producing components own the correctness of their subdirectories.
+- **Allowed Contents:** Caches, installed model data, generated previews, export outputs, temporary files, and other runtime-generated artifacts.
+- **Forbidden Contents:** Application source code; dependency manifests; architecture documentation; reusable developer scripts; committed configuration; version-controlled configuration templates; configuration schemas; project defaults; secrets or credentials; production data copied into Git.
+- **Notes:** Git ignores `data/` contents except its placeholder. Contents are disposable or governed by runtime retention/backup policy and are never treated as version-controlled source. Shared committed configuration belongs under `config/`, while deployment-specific configuration belongs under `deploy/`.
+
+### `docs/`
+
+- **Purpose:** Own long-term project documentation.
+- **Repository Owner:** Technical lead and the maintainers of the documented subsystem.
+- **Allowed Contents:** Architecture documents, ADRs, specifications, diagrams, operational documentation, and other durable project guidance.
+- **Forbidden Contents:** Application implementation; executable operator/deployment scripts; runtime-generated data; build output; secrets or credentials; transient personal notes presented as project policy.
+- **Notes:** Authoritative documents and derived diagrams must remain consistent. Material architecture decisions require the appropriate document or ADR update.
+
+### `prompts/`
+
+- **Purpose:** Own reusable prompts used during development and planning.
+- **Repository Owner:** Development team, with the technical lead accountable for prompts that define sprint scope.
+- **Allowed Contents:** Version-controlled reusable prompts, sprint prompts, prompt templates, and concise prompt-specific usage notes.
+- **Forbidden Contents:** Generated model responses; application source code; runtime data; application runtime configuration; runtime business rules; production policy; operational or application sources of truth; secrets, credentials, or private production content; one-off personal scratch prompts.
+- **Notes:** `prompts/` must never be loaded by the application as runtime configuration, must never define runtime business rules, must never be treated as production policy, and must never become an operational or application runtime source of truth. Accepted architecture documents, ADRs, validated configuration, immutable preset revisions, and PostgreSQL records remain authoritative according to their domains.
+
+### `samples/`
+
+- **Purpose:** Own sample datasets, fixtures, and reference images used for documentation, evaluation, or later tests.
+- **Repository Owner:** Quality and product maintainers, with technical owners reviewing format and licensing requirements.
+- **Allowed Contents:** Licensed or approved sample images, synthetic fixtures, reference outputs, manifests, and non-sensitive metadata required to interpret them.
+- **Forbidden Contents:** Production data; customer data; unlicensed assets; secrets or credentials; runtime outputs presented as approved references; application source code.
+- **Notes:** Sample data is never production data. Large or policy-restricted samples remain outside Git; current raw and reference-output directories track placeholders only.
+
+### `scripts/`
+
+- **Purpose:** Own repository-level developer utilities only.
+- **Repository Owner:** Developer-experience maintainers.
+- **Allowed Contents:** Bootstrap, lint, format, verify, and documentation utilities that operate on the repository or developer workflow.
+- **Forbidden Contents:** Deployment or operator scripts; application business logic; long-running runtime services; generated data; secrets or credentials; user-specific automation.
+- **Notes:** Deployment scripts belong under `deploy/scripts/`. Root `scripts/` must not install, start, stop, upgrade, back up, restore, or otherwise operate a deployed environment.
 
 ## Dependency Rules
 
