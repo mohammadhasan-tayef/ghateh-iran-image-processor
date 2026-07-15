@@ -41,6 +41,7 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 - [Proposed project structure](docs/architecture/project-structure.md)
 - [Git branch and commit standards](docs/architecture/git-branch-and-commit-standards.md)
 - [Pull Request title and target standards](docs/architecture/pull-request-title-and-target-standards.md)
+- [Pull Request description structure](docs/architecture/pull-request-description-structure.md)
 - [Sprint plan](docs/architecture/sprint-plan.md)
 - [Architecture decisions](docs/adr/)
 - [Mermaid diagrams](docs/diagrams/)
