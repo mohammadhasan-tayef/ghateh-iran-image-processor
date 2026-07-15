@@ -1,11 +1,12 @@
-# Review Sequence
+# Review and Export Sequence
 
-Derived from [state machines](../architecture/state-machines.md) and [ADR 0007](../adr/0007-human-review-before-final-export.md).
+Derived from [state machines](../architecture/state-machines.md), [ADR 0007](../adr/0007-human-review-before-final-export.md), and [ADR 0010](../adr/0010-export-lifecycle-separated-from-image-lifecycle.md).
 
 ```mermaid
 sequenceDiagram
     actor R as Reviewer
-    participant UI as Review UI
+    actor A as Admin
+    participant UI as fa-IR RTL Review UI
     participant API as REST API
     participant DB as PostgreSQL
     participant Media as Authorized media service
@@ -13,26 +14,32 @@ sequenceDiagram
 
     R->>UI: Open next review item
     UI->>API: GET /review-queue?cursor=...
-    API->>DB: Query needs_review page
-    API-->>UI: Source/candidate IDs, QC, warnings
-    UI->>Media: Request source, candidate, optional mask
-    Media->>DB: Authorize referenced resources
-    Media-->>UI: Stream safe media
+    API->>DB: Query needs_review page prioritized by QC
+    API-->>UI: SourceObservation, candidate, warnings
+    UI->>Media: Request SourcePreviewArtifact + candidate/mask
+    Media->>DB: Authorize workflow resources
+    Media-->>UI: Stream display-only media
     alt Approve
-        R->>UI: Approve candidate
-        UI->>API: POST review decision (candidate, ETag, key)
-        API->>DB: Lock membership; decision + selected candidate
-        API-->>UI: human_approved
+        R->>UI: Approve selected candidate
+        UI->>API: POST decision (session + CSRF + ETag)
+        API->>DB: Lock BatchImage; composite FK; decision + selection
+        API-->>UI: BatchImage human_approved
     else Reject
         R->>UI: Reject with reason
-        UI->>API: POST review decision
-        API->>DB: Record immutable rejection
-        API-->>UI: rejected
+        UI->>API: POST decision
+        API->>DB: Immutable rejection
+        API-->>UI: BatchImage rejected
     else Reprocess
-        R->>UI: Choose preset/engine and reason
-        UI->>API: POST review decision
-        API->>DB: Decision + new pending run + outbox
-        DB-->>Q: Publish new run intent
-        API-->>UI: reprocess_queued
+        R->>UI: Select preset/engine + reason
+        UI->>API: POST decision
+        API->>DB: Decision + new run + reprocess_queued
+        DB-->>Q: Publish run id
     end
+
+    Note over DB: Batch may reach review_completed before any export
+    A->>API: POST /export-jobs with approved candidate + naming snapshot
+    API->>DB: Validate human approval; create independent job/items
+    DB-->>Q: Publish ExportItem ids
+    Q-->>DB: Export worker records item/job outcome only
+    Note over DB: BatchImage remains human_approved on export success or failure
 ```

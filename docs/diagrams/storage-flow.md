@@ -4,28 +4,36 @@ Derived from [storage design](../architecture/storage-design.md).
 
 ```mermaid
 flowchart LR
+    Config[Server config\nconfig_key to mounted path]
+    Admin[Admin sends config_key + alias]
+    Root[StorageRoot\nexpected volume identity]
     Client[Client sends root_id + relative_path]
-    Resolver[Storage root resolver]
-    Guard[Normalize, contain, no-follow / reparse checks]
-    Original[(inbox/ immutable original)]
-    Working[working/{operation_id}/]
+    Guard[Containment, Unicode/case, no-follow/reparse]
+    Source[(Immutable source)]
+    Obs[SourceObservation\nsize + mtime + streamed SHA-256]
+    SourcePreview[(Regenerable source preview\norientation + resize only)]
+    Working[working/{operation_id}]
+    Candidate[(Immutable CandidateVersion\nUUID; internal RGB or RGBA)]
+    Approval[Human approval in PostgreSQL]
+    ExportJob[ExportJob\nimmutable naming snapshot]
     Partial[Target-volume .partial]
-    Candidate[(candidates/{asset}/{version}.png)]
-    Review[Human approval in PostgreSQL]
-    ExportPartial[exports/... .partial]
-    Final[(exports/{batch}/final.png)]
+    Final[(2000x2000 8-bit sRGB RGB PNG\nno alpha; white)]
 
-    Client --> Resolver --> Guard --> Original
-    Original -->|stream read; no overwrite| Working
-    Working -->|copy/write + flush + checksum| Partial
-    Partial -->|atomic same-volume no-replace rename| Candidate
-    Candidate --> Review
-    Review -->|approved candidate only| ExportPartial
-    ExportPartial -->|verify + atomic rename| Final
+    Config --> Root
+    Admin --> Root
+    Client --> Root --> Guard --> Source
+    Source -->|stat + bounded stream| Obs
+    Obs -->|orientation + display resize| SourcePreview
+    Obs -->|exact observation read| Working
+    Working -->|checksum + atomic finalize| Candidate
+    Candidate --> Approval --> ExportJob
+    ExportJob --> Partial -->|verify + atomic rename| Final
 
-    DB[(PostgreSQL descriptors, checksums, operation state)]
-    Resolver --- DB
+    DB[(PostgreSQL descriptors, states, checksums)]
+    Root --- DB
+    Obs --- DB
+    SourcePreview --- DB
     Candidate --- DB
-    Review --- DB
+    ExportJob --- DB
     Final --- DB
 ```

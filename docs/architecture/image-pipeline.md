@@ -1,66 +1,85 @@
 # Image Pipeline
 
-This document is authoritative for processing stages, contracts, authenticity controls, artifact production, and reproducibility. The pipeline is non-generative: it may select pixels, transform them conservatively, and composite them; it must not synthesize missing product content.
+This document is authoritative for processing stages, SubjectMode, authenticity controls, deterministic contact shadow, artifact formats, quality checks, and reproducibility. The pipeline is non-generative: it may select/transform real pixels and derive a shadow from the real mask; it never synthesizes missing product content.
 
-## Pipeline Context
+## PipelineContext and Preset Snapshot
 
-`PipelineContext` is an immutable-per-stage data contract assembled for one `ProcessingRun`. It contains:
+`PipelineContext` is assembled for one ProcessingRun and contains run/BatchImage/SourceObservation/root identifiers; expected logical key/size/SHA-256; authorized storage reader; immutable preset revision/snapshot; SubjectMode; engine/model/checksum; code/stage versions; device/determinism facts; bounded stage parameters; artifacts/measurements/warnings/timings; and cancellation/deadline signals.
 
-- run, batch-image, asset, storage-root, preset-revision, engine, model-installation, and correlation identifiers;
-- source logical key, expected SHA-256/size/format, and an authorized storage reader;
-- pipeline code version, stage graph version, model name/version/checksum, device and deterministic settings;
-- bounded parameters for segmentation, refinement, framing, correction, denoise, sharpening, encoding, and QC;
-- stage artifact descriptors, measurements, warnings, timings, and cancellation/deadline signals.
+The validated preset snapshot includes:
 
-Stages do not open arbitrary paths or write database state. A stage consumes a typed context/artifact and returns a new artifact descriptor plus facts. Large pixel arrays may be mutable within a worker for efficiency but are never shared between runs; ownership and cleanup are explicit.
+- `subject_mode`: `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, or `manual_subject_selection_required`;
+- framing, segmentation, mask-refinement, correction, denoise, sharpening, encoding, and QC settings;
+- `shadow_enabled` (default false), `shadow_opacity`, `shadow_blur_ratio`, `shadow_offset_x`, `shadow_offset_y`, `shadow_color`, and `shadow_spread`.
 
-## Stage Contract
+Stages do not open arbitrary paths or persist business state. Each declares typed inputs/outputs, parameter/version schema, resource estimate, deterministic expectation, cancellation points, failure categories, and metrics. Pixel buffers have one run owner and bounded cleanup.
 
-Every stage declares input/output media type, parameter schema/version, memory estimate, deterministic expectation, failure categories, and produced metrics. It must validate prerequisites, check cancellation at safe points, bound allocations, avoid hidden global state, and never overwrite an input. Failures are typed as validation, source integrity, resource exhaustion, engine/model, quality gate, cancellation, or transient I/O.
+## Default Candidate Pipeline
 
-## Default Pipeline
+1. **Verify source observation:** open through StorageBackend; re-stat and stream/check exact size/SHA-256; reject mutation/substitution; enforce decode limits.
+2. **Decode/orient:** verify signature, apply EXIF orientation, normalize to documented sRGB working space; source remains unchanged.
+3. **Evaluate SubjectMode:** establish expected subject composition. `manual_subject_selection_required` always records a manual-review requirement. No mode can recover absent/cropped components.
+4. **Segment:** use BiRefNet Strategy primary; rembg only by explicit fallback/reprocess policy. Never silently blend engines.
+5. **Refine mask:** bounded morphology/edge feathering and hole preservation; retain raw/refined mask facts.
+6. **Subject/authenticity gates:** compare component count/topology/coverage with SubjectMode and detect clipping, lost holes, disconnected fine structures, uncertain foreground, or unintended hands/tools/background objects. Ambiguity routes to review; invalid/empty output fails processing.
+7. **Crop geometry:** derive foreground bounds without warping proportions; boundary-clipped/empty masks fail.
+8. **Conservative correction:** bounded global/per-channel foreground-only lighting/color. No inpainting, content-aware fill, generative relighting, local reconstruction, or geometry warp.
+9. **Mild cleanup:** optional bounded denoise/unsharp mask; disable/warn when text/edge proxies show damage risk.
+10. **Place geometry:** uniformly scale the real foreground/mask into the 2000 × 2000 coordinate system using preset margins/anchor.
+11. **Deterministic contact shadow (optional):** derive shadow only from the placed real mask, then render it behind the product onto the white canvas.
+12. **Compose candidate:** composite the unchanged placed product above optional shadow. Internal candidate may be RGBA when provenance/review needs it; display preview is white-backed.
+13. **Encode artifacts:** lossless candidate PNG plus optional grayscale/alpha mask and display preview; finalize atomically.
+14. **Quality checks:** validate format/geometry/background, subject-mode consistency, mask topology, clipping/margins, edge/blur/noise/color deltas, shadow limits, and checksums.
+15. **Finalize/route:** lock BatchImage briefly, insert CandidateVersion UUID/safe display sequence, commit provenance/QC, transition `candidate_ready`, then publish to `needs_review`.
 
-1. **Verify source:** open through storage, stream/check expected bytes and SHA-256, reject mutation, and enforce decode limits.
-2. **Decode/orient:** decode the actual signature, apply EXIF orientation, normalize to a documented color space, and preserve the untouched source.
-3. **Segment:** run the configured engine Strategy. BiRefNet is primary; rembg is fallback only through explicit policy or reprocess selection, not silent result blending.
-4. **Refine mask:** bounded morphology/edge feathering and hole preservation. Retain the raw and refined mask descriptors for diagnosis when policy enables them.
-5. **Authenticity gates:** detect likely clipping, lost internal holes, disconnected fine structures, excessive transparent area, uncertain foreground, or a material mask change. Unsafe cases route to review with warnings; severe invalid output fails the run.
-6. **Crop geometry:** calculate the foreground bounding box without changing product proportions. Empty or boundary-clipped masks fail.
-7. **Conservative correction:** bounded global/per-channel lighting and color operations applied to foreground pixels only. No inpainting, content-aware fill, generative relighting, shape warp, or local reconstruction.
-8. **Mild cleanup:** optional preset-bounded denoise and unsharp mask. Disable or warn when text/edge metrics indicate damage risk.
-9. **Compose:** scale uniformly into a 2000 × 2000 canvas with category/preset margins, center according to the documented anchor, and composite all background pixels to exact sRGB `#FFFFFF`.
-10. **Encode candidate:** lossless PNG with controlled metadata; generate mask/preview as separate versioned artifacts.
-11. **Quality checks:** validate dimensions, PNG decodability, canvas background, margins, clipping, foreground coverage, mask topology deltas, edge halos, blur/noise deltas, color deltas, and output checksum.
-12. **Finalize/route:** atomically finalize artifacts, persist candidate provenance and QC facts, and route every rollout-one candidate to `needs_review`.
+## DeterministicContactShadowStage
 
-## Segmentation Abstraction
+The optional stage is non-generative and disabled by default until benchmark acceptance. It takes only the transformed real product mask and preset values. It creates a neutral-gray, low-opacity silhouette with bounded spread, soft blur, and small offset. It has no directional-light model and cannot sample/invent product content.
 
-`SegmentationEngine.segment(input, options) -> SegmentationResult` is a Strategy port. The result includes alpha/mask, engine confidence components when meaningful, warnings, model identity/checksum, timings, and device facts. Adapters translate BiRefNet/rembg inputs and errors but cannot normalize away uncertainty. A Factory chooses only an installed, verified adapter allowed by the immutable preset revision.
+Constraints:
 
-BiRefNet is selected by [ADR 0008](../adr/0008-birefnet-primary-rembg-fallback.md), subject to a Sprint 3 benchmark gate. rembg is a fallback adapter for explicit retry or configured technical failure; its output receives identical QC and review.
+- product RGB/alpha pixels are never modified; the product composites above the shadow;
+- opacity, blur ratio, offsets, spread, and neutral color are strictly bounded;
+- the shadow cannot obscure product detail, exceed canvas bounds silently, form a strong directional cast, or create a floating appearance;
+- products/packaging for which a derived shadow reduces authenticity use `shadow_enabled: false`;
+- QC records mask-to-shadow geometry, opacity/extent, clipping, and a floating/overlap warning signal;
+- every shadow parameter is captured in the immutable ProcessingRun preset snapshot.
 
-## Authenticity and Hard Cases
+## Subject Selection and Hard Cases
 
-Deterministically safe operations include orientation, uniform scaling, canvas placement, exact-white compositing, lossless encoding, bounded global correction, and checksum/properties validation. Segmentation, mask refinement, denoising, sharpening, and foreground/background classification are uncertain.
+Background segmentation answers foreground likelihood, not which foreground objects belong to the SKU. SubjectMode supplies the business policy:
 
-- **Text and geometry:** never warp or reconstruct; compare edge/text-region proxies before/after and warn on material change.
-- **Internal holes:** preserve mask topology; large topology deltas or filled holes require review.
-- **Thin cables:** use high-resolution masks and conservative refinement; warn on disconnected components or vanishing skeleton length.
-- **Transparent/translucent materials:** default to mandatory review; exact white compositing may change appearance and confidence is not semantic proof.
-- **White products:** use boundary/context-aware segmentation and warn on low contrast or lost edges.
-- **Reflective metal:** cap correction/sharpening; detect highlight clipping and halos.
-- **Dark products:** detect crushed shadows and foreground holes; avoid aggressive black-point changes.
+- `single_object`: one connected sellable object expected; disconnected components warn/fail routing.
+- `product_with_packaging`: product and its intended packaging may remain; unrelated labels/tools do not.
+- `multi_component_product`: multiple physically present components are expected and preserved.
+- `keep_all_foreground_objects`: preserve all real foreground objects; still warn about photography-policy violations.
+- `manual_subject_selection_required`: no automatic subject completeness claim; human review is mandatory.
 
-If the foreground is empty, clipped, implausibly small/large, materially fragmented, or the engine/model is unverified, the pipeline stops or produces a clearly warned review candidate according to preset policy. It never fills a suspected missing part.
+Input should show one SKU and all required real parts. Hidden/cropped parts are never reconstructed. Thin cables, internal holes, transparent/white/dark products, reflective metal, packaging, and multiple disconnected objects receive specialized topology/contrast/highlight warnings. Text and geometry are never warped.
 
-## Quality and Confidence
+## Quality, Confidence, and Review
 
-The quality result is a versioned vector of measurements and rule outcomes plus an optional calibrated routing score. Candidate factors include valid format/dimensions, foreground coverage/margins, clipping, background purity, mask uncertainty, topology, blur/noise deltas, color delta, halo indicators, and engine signals. Thresholds are preset revision data and are calibrated against labeled fixtures.
+Technical quality is a versioned vector: decodability/dimensions, foreground coverage/margins, clipping, exact background where applicable, mask uncertainty/topology, SubjectMode signals, edge halos, blur/noise/color deltas, shadow bounds, engine signals, and provenance completeness. A calibrated routing score may prioritize the review queue.
 
-Quality score answers “did this artifact satisfy measurable technical rules?” Segmentation confidence estimates an engine/model property. Neither answers “is every product component semantically correct?” A high score cannot guarantee product accuracy and never bypasses human approval in rollout one.
+Quality asks whether measurable rules passed. Engine confidence estimates model behavior. Neither guarantees semantic/product correctness. Every rollout-one candidate requires explicit human approval before any production export; no score or rule creates approval.
+
+## Production Export Encoding
+
+Export is a downstream workflow, not a BatchImage pipeline state. The exporter reads an approved immutable candidate, composites any remaining alpha over exact `#FFFFFF`, converts using the documented color profile, strips hidden transparency/unsafe metadata, and validates:
+
+- PNG;
+- exactly 2000 × 2000 pixels;
+- 8-bit per channel;
+- sRGB;
+- RGB color type with no alpha channel;
+- pure white `#FFFFFF` canvas outside the real product and any explicitly enabled bounded contact shadow.
+
+It writes a separate ExportItem artifact and never mutates the candidate or BatchImage state.
+
+## Source Preview
+
+Review uses SourcePreviewArtifact to avoid repeated full-resolution source streaming. Generation reads the exact SourceObservation and applies only EXIF orientation normalization and bounded display resize. It performs no background removal, correction, crop, shadow, denoise, sharpening, or product editing. Generation/version/checksum/dimensions/MIME are recorded, host paths are never exposed, and regeneration is safe.
 
 ## Reproducibility
 
-Each run records source checksum; pipeline/stage versions; preset revision and full validated parameters; engine/model/checksum; dependency lock/build identity; device type; relevant library versions; random seeds; deterministic flags; stage timings/warnings; and artifact checksums. GPU operations may remain nondeterministic; the record must identify that fact and golden tests use tolerance/metrics rather than byte identity where justified.
-
-Reprocessing always creates a new run and candidate. Previous candidates remain immutable and selectable through review policy.
+Each run records source-observation/checksum; SubjectMode; pipeline/stage/preset versions and validated values; shadow parameters; engine/model/checksum; dependency/build identity; device/library facts; seeds/deterministic flags; stage timings/warnings; and artifact checksums. GPU nondeterminism is recorded and tested with approved tolerances. Reprocessing creates a new run/candidate; prior versions remain immutable/selectable.

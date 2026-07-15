@@ -1,67 +1,61 @@
 # Worker and Queue Design
 
-This document is authoritative for asynchronous dispatch, Celery queues, idempotency, retries, cancellation, concurrency, backpressure, and recovery.
+This document is authoritative for asynchronous dispatch, queues, idempotency, candidate concurrency, retries, cancellation, backpressure, and recovery.
 
-## Responsibilities
+## Truth and Queues
 
-PostgreSQL owns intended work, lifecycle state, leases, candidates, review decisions, and export facts. Redis carries Celery messages, short-lived locks, cancellation hints, and disposable result/coordination data. A missing Redis key never means a business operation succeeded, failed, or was cancelled.
+PostgreSQL owns intended work, Batch/BatchImage/ProcessingRun states, SourceObservations, candidates, review, UserSessions, and independent export state. Redis carries Celery messages, short locks, cancellation hints, and disposable coordination. Celery/Redis never determine business or authentication truth.
 
-A transactional outbox row is committed with state that requires work. A dispatcher publishes it to Celery and marks publication idempotently. Periodic reconciliation republishes unpublished/stale intents and repairs roll-ups.
-
-## Queues
-
-| Queue | Tasks | Default worker profile |
+| Queue | Work | Baseline profile |
 |---|---|---|
-| `scan` | Incremental directory chunks, hashing/registration | maintenance, low I/O concurrency |
-| `image.cpu` | CPU segmentation and pipeline | image worker, small configured concurrency |
-| `image.gpu` | Optional GPU pipeline | one/few processes per GPU with memory guard |
-| `export` | Verified copy/finalize | maintenance/export, bounded per-volume concurrency |
-| `maintenance` | Outbox dispatch, stale lease and artifact reconciliation, roll-ups, retention | single/fenced periodic execution |
+| `scan` | Incremental list, SourceObservation creation, streamed hashing/registration, source preview generation | maintenance, bounded I/O |
+| `image.cpu` | CPU pipeline and candidate creation | low concurrency, Python 3.12 Linux container |
+| `image.gpu` | Deferred optional NVIDIA profile | one/few processes per verified GPU |
+| `export` | Independent production RGB PNG finalization | bounded per-root I/O |
+| `maintenance` | Outbox, stale lease/artifact reconciliation, roll-ups, retention | fenced singleton passes |
 
-Queue names are routing concerns, not domain concepts. Tasks carry IDs and logical references, not images, model tensors, absolute paths, or full parameter documents.
+Tasks carry operation/resource ids and expected versions, never image bytes, mount paths, model tensors, or unbounded snapshots. A transactional outbox publishes committed intent; reconciliation republishes pending intent after Redis loss.
 
-## Task Protocol and Idempotency
+## Task Protocol
 
-1. Receive `{operation_id, resource_id, expected_version}`.
-2. Load authoritative rows and return success for an already equivalent terminal result.
-3. Claim using expected state and a random lease/fencing token.
-4. Resolve immutable preset/model/storage descriptors.
-5. Perform bounded work with cancellation and heartbeat checks.
-6. Finalize artifacts using operation-scoped names.
-7. Commit completion only if the lease token is current; append event/outbox.
+1. Load authoritative resource and return equivalent terminal result on duplicate delivery.
+2. Claim expected state with random lease/fencing token.
+3. Resolve exact SourceObservation, immutable preset/naming/model snapshot, and server-configured root.
+4. Perform bounded work with heartbeat/cancellation checks.
+5. Write operation-scoped temporary artifacts and validate checksum/media facts.
+6. Commit completion only with the current fencing token; append event/outbox.
 
-Celery `task_id` aids tracing but is not the idempotency key. Scan chunks key by batch/cursor epoch; processing attempts by `processing_run.id`; exports by `export_item.id`; maintenance jobs by scope/time bucket. `acks_late` and worker-lost rejection are considered only with idempotent behavior and verified Celery transport semantics.
+Idempotency keys: scan by batch/cursor epoch, hash/preview by SourceObservation/generation, process by ProcessingRun id, export by ExportItem id, and maintenance by scope/time bucket. Celery task id is trace metadata only.
 
-## Retries
+## Candidate Finalization and Concurrency
 
-Automatically retry bounded transient failures: storage temporarily unavailable, network interruption to PostgreSQL/Redis, lock contention, worker loss, and explicitly classified engine resource startup errors. Use exponential backoff with jitter and a maximum attempt/elapsed-time policy stored with the operation.
+Candidate identity is UUID; `version_no` is human-readable per BatchImage. After artifact verification, the worker starts a short transaction, checks run lease/idempotency, obtains `FOR UPDATE` on BatchImage, returns the existing candidate for an already-finalized run, calculates/allocates the next sequence while locked, inserts CandidateVersion, marks ProcessingRun succeeded, transitions BatchImage to `candidate_ready`, and emits events/outbox.
 
-Do not auto-retry path-security violations, unsupported/corrupt inputs, source checksum change, missing/unverified model, deterministic decode/model errors, authenticity/quality gates, or resource needs exceeding configured limits. These require configuration, operator review, or an explicit new run. A terminal processing retry creates a linked `ProcessingRun`; redelivery before terminal completion continues the same run.
+Never use an unprotected `MAX(version_no) + 1`. Concurrent different reprocess runs may compute artifacts, but finalization serializes sequence allocation. Composite FKs and unique `(batch_image_id, version_no)` guard mistakes. A stale worker cannot commit. Losing after artifact write creates a reconcilable orphan; losing after DB commit makes redelivery return the existing candidate.
 
-## Cancellation
+## Retries and Cancellation
 
-The API persists `cancel_requested_at`/intent in PostgreSQL and may set a Redis hint. Workers check before claim, between stages, and during chunkable operations. Cancellation cannot safely interrupt a final rename/DB completion critical section; it completes that short section and records whether the result was committed. Hard termination is a last resort, followed by lease/artifact reconciliation. Exported files are not automatically deleted on later cancellation.
+Retry bounded transient mount unavailability, PostgreSQL/Redis interruption, lock contention, worker loss, and classified resource startup errors with exponential backoff/jitter and durable limits. Do not automatically retry path-security, corrupt/unsupported input, changed source observation, missing/unverified model, deterministic engine/decode, authenticity gate, or oversized resource failures. A terminal process retry creates a linked new ProcessingRun.
 
-## Concurrency and Resources
+Cancellation is persisted in PostgreSQL with optional Redis hint. Workers check before claim and between chunk/stage boundaries. A short atomic finalize critical section completes or rolls back; hard termination requires lease/artifact reconciliation. Cancelling/failing an ExportItem never moves BatchImage out of `human_approved`.
 
-- CPU concurrency is derived from measured RAM per run and core availability, not CPU count alone; default conservatively to one image process on unknown hardware.
-- GPU workers route only compatible verified model installations; default one process per GPU until memory benchmarks permit more.
-- Set hard input pixel/byte limits, per-task time limits, process recycling, prefetch of one for large image tasks, and local scratch quotas.
-- Scan and export concurrency is capped per storage root to avoid saturating a USB drive.
-- Maintenance tasks use PostgreSQL advisory locks/fencing so multiple schedulers cannot perform the same singleton pass.
+## Resources and Backpressure
 
-## Backpressure
+- CPU is mandatory; unknown hardware starts at one image process and one active task until RAM/latency benchmarks.
+- Optional GPU queue is deferred and records device/model in a new run; no silent device substitution.
+- Enforce byte/pixel/time/RAM/scratch limits, worker recycling, and prefetch one for large image work.
+- Cap scan/hash/preview/export concurrency per root to protect USB I/O.
+- Do not publish an entire massive batch. Registration and outbox dispatch use bounded chunks/watermarks and pause/resume with hysteresis.
 
-Do not enqueue an entire massive batch at once. Registration writes chunks and creates durable pending intents. A dispatcher maintains queue-depth and pending-work watermarks, pauses scan dispatch or processing publication when Redis depth, database latency, disk free space, storage errors, or worker memory crosses thresholds, and resumes with hysteresis. The UI derives progress from database counts.
+## Crash, Mount, and Roll-Up Recovery
 
-## Crash and Redis Recovery
+- Stale run leases return to pending only if no candidate exists; verified final artifacts may be adopted only through all relational/provenance checks.
+- Unpublished/outstanding PostgreSQL intents rebuild queues after Redis loss.
+- Late stale-token completion is rejected; orphan artifacts are quarantined/reconciled.
+- Batch roll-up uses only BatchImage processing/review states. ExportJob roll-up uses only ExportItem states. Export-at-least-once is a derived metric, not Batch closure.
+- Missing mount holds work. Scan pauses; processing retries/blocks; export item retries/fails independently. A different reconnected volume identity blocks all automatic resume.
+- Shutdown stops claims and allows a configured grace period.
 
-- Stale leases are inspected after expiry. If a matching final artifact verifies, completion is adopted conditionally; otherwise safe temporary artifacts are removed and the task returns to pending or fails by policy.
-- Unpublished outbox messages are republished. Published-but-unconsumed work is reconstructed from nonterminal rows after a Redis loss.
-- Late completions with stale fencing tokens are rejected and their unreferenced artifacts quarantined/reconciled.
-- Batch/job roll-ups recompute from member/item state, making missed notifications repairable.
-- Shutdown stops new claims, signals cancellation only when requested, and allows a configured grace period.
+## Baseline Risk
 
-## Operational Risks
-
-Celery on native Windows has limitations; the supported baseline runs Linux worker containers under the Windows host deployment. GPU passthrough, PyTorch/CUDA versions, and Docker/WSL compatibility need a dedicated spike. Redis result backend data is optional and short-lived because operational status comes from PostgreSQL.
+Celery native Windows support is not the baseline. Workers run in Linux containers under Windows 11/Docker Desktop/WSL2. Redis 7.x, Python 3.12, and exact images/patches are pinned and compatibility-tested in Sprint 1. GPU/PyTorch/CUDA remains a later profile.

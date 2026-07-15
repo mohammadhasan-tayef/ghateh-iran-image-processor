@@ -4,13 +4,13 @@ Ghateh Iran Image Processor is a self-hosted, local-network system for registeri
 
 ## Current Status
 
-Sprint 0 — Architecture and technical specification.
+Sprint 0.1 — Architecture corrections and technical specification refinement.
 
 No application code has been implemented yet.
 
 ## Sprint 0 Scope
 
-Sprint 0 defines product requirements, the modular-monolith boundary, domain and state models, secure external-storage handling, the image pipeline, REST API, persistence, queues, review controls, deployment, testing, and incremental delivery. It creates documentation only; implementation and dependency installation are deliberately deferred.
+Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-monolith boundary, domain and state models, secure external-storage handling, image pipeline, REST API, persistence, queues, review controls, deployment, testing, and incremental delivery. These sprints create documentation only; implementation and dependency installation are deliberately deferred.
 
 ## Core Principles
 
@@ -20,6 +20,8 @@ Sprint 0 defines product requirements, the modular-monolith boundary, domain and
 - Product authenticity takes priority over aesthetic similarity.
 - Automated checks assist review but do not prove semantic correctness.
 - The first rollout requires explicit human approval before final export.
+- Image review completion and export completion are independent lifecycles.
+- Named local accounts use PostgreSQL-backed server sessions; browser JWT authentication is excluded from the MVP.
 
 ## Documentation Index
 
@@ -54,4 +56,4 @@ Sprint 0 defines product requirements, the modular-monolith boundary, domain and
 
 ## Next Steps
 
-Review and approve the Sprint 0 decisions and unresolved questions. Sprint 1 should then establish the repository toolchain and implement only the walking skeleton described in the [sprint plan](docs/architecture/sprint-plan.md), with no image processing yet.
+Review and approve the corrected Sprint 0.1 decisions and remaining open questions. Sprint 1 may begin only after this documentation branch is accepted; it should establish the pinned toolchain and implement only the walking skeleton described in the [sprint plan](docs/architecture/sprint-plan.md), with no image processing yet.

@@ -9,12 +9,13 @@ The first deployment reads an external Windows drive directly, while later worke
 
 ## Decision
 
-Introduce a capability-based `StorageBackend` port and implement local storage first. All business references are `{storage_root_id, logical_key}`. Root mappings are server configuration and never cross the REST boundary. The adapter enforces containment, no-follow/reparse protections, streamed I/O, operation-scoped temporary writes, checksum verification, and atomic same-volume finalization.
+Introduce a capability-based `StorageBackend` port and implement local storage first. Host/Docker configuration defines stable `config_key → container_path/mode` mappings. An administrator activates or labels only a known config key; the frontend never submits a host path. All file/folder references are `{storage_root_id, logical_key}`. Mount mappings never cross the REST boundary. The adapter enforces volume identity, containment, Unicode/case collision controls, no-follow/reparse protections, streamed I/O, operation-scoped temporary writes, checksum verification, and atomic same-volume finalization.
 
 ## Consequences
 
 - Originals can be referenced without copying and host paths do not contaminate domain/API contracts.
 - The adapter requires a rigorous Windows conformance/security suite.
+- Missing mounts, drive-letter remaps, disconnects, and different reconnected volume identities have explicit blocked/recovery behavior.
 - NAS/object backends can preserve logical keys but must disclose different atomicity/capability semantics.
 - The abstraction must stay task-focused; it is not a generic virtual filesystem.
 
