@@ -39,6 +39,7 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 - [Testing strategy](docs/architecture/testing-strategy.md)
 - [Deployment](docs/architecture/deployment.md)
 - [Proposed project structure](docs/architecture/project-structure.md)
+- [Git branch and commit standards](docs/architecture/git-branch-and-commit-standards.md)
 - [Sprint plan](docs/architecture/sprint-plan.md)
 - [Architecture decisions](docs/adr/)
 - [Mermaid diagrams](docs/diagrams/)
