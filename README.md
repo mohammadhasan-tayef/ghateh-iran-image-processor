@@ -4,9 +4,9 @@ Ghateh Iran Image Processor is a self-hosted, local-network system for registeri
 
 ## Current Status
 
-Sprint 0.1 — Architecture corrections and technical specification refinement.
+Sprint 1.1 — Project Skeleton completed.
 
-No application code has been implemented yet.
+No executable application code has been implemented yet.
 
 ## Sprint 0 Scope
 
@@ -46,22 +46,16 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Repository Structure
 
-- `apps/` — application workspace placeholders
-  - `apps/api/` — API application workspace placeholder
-  - `apps/web/` — web application workspace placeholder
+- `backend/` — backend workspace placeholder
+- `frontend/` — frontend workspace placeholder
+- `deploy/` — deployment workspace placeholder
 - `config/` — repository configuration placeholder
 - `data/` — ignored local data; only the placeholder is tracked
-- `infra/` — infrastructure workspace placeholder
 - `scripts/` — repository scripts placeholder
-- `tests/` — cross-project test workspace placeholder
-- `docs/architecture/` — authoritative technical designs
-- `docs/adr/` — accepted architecture decisions and rationale
-- `docs/diagrams/` — Mermaid views derived from the authoritative documents
-- `docs/specifications/` — product requirements and acceptance criteria
-- `prompts/sprints/` — source prompts for planning sprints
-- `samples/raw/` — ignored local raw fixtures; only the placeholder is tracked
-- `samples/reference-output/` — ignored local reference results; only the placeholder is tracked
+- `docs/` — authoritative specifications, architecture, decisions, and diagrams
+- `prompts/` — sprint source prompts
+- `samples/` — ignored local fixtures and reference outputs
 
 ## Next Steps
 
-Review and approve the corrected Sprint 0.1 decisions and remaining open questions. Sprint 1 may begin only after this documentation branch is accepted; it should establish the pinned toolchain and implement only the walking skeleton described in the [sprint plan](docs/architecture/sprint-plan.md), with no image processing yet.
+After this repository-structure alignment patch is merged, the next step is Sprint 1.2.
