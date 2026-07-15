@@ -8,7 +8,8 @@ Thumbs.db
 *.swp
 
 # Image datasets and local samples
-data/
+data/*
+!data/.gitkeep
 datasets/
 samples/raw/*
 !samples/raw/.gitkeep

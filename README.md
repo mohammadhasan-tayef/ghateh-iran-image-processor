@@ -46,6 +46,14 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Repository Structure
 
+- `apps/` — application workspace placeholders
+  - `apps/api/` — API application workspace placeholder
+  - `apps/web/` — web application workspace placeholder
+- `config/` — repository configuration placeholder
+- `data/` — ignored local data; only the placeholder is tracked
+- `infra/` — infrastructure workspace placeholder
+- `scripts/` — repository scripts placeholder
+- `tests/` — cross-project test workspace placeholder
 - `docs/architecture/` — authoritative technical designs
 - `docs/adr/` — accepted architecture decisions and rationale
 - `docs/diagrams/` — Mermaid views derived from the authoritative documents
