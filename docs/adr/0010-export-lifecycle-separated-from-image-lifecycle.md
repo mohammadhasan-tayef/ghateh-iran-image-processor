@@ -9,7 +9,7 @@ The original state design moved BatchImage through export-ready/exported and mad
 
 ## Decision
 
-BatchImage owns only discovery, registration, processing, candidate readiness/selection, review, approval/rejection/reprocess, processing failure, and cancellation. Batch closes as `review_completed` or `partially_completed` from member processing/review resolutions, never export completion.
+BatchImage owns only discovery, registration, processing, candidate readiness/selection, review, approval/rejection/reprocess, processing failure, and cancellation. Batch closes a review cycle as `review_completed` or `partially_completed` from member processing/review resolutions, never export completion. Those closed-cycle states may reopen to `processing` only through an authorized atomic `ReprocessBatchImage` command that increments `review_cycle` once; workers cannot reopen them. Cancelled/failed Batches remain permanently terminal for normal operations.
 
 ExportJob and ExportItem own all export states. ExportItem references a CandidateVersion and BatchImage through same-parent composite integrity and is created only after human approval validation. One candidate may participate in multiple independent jobs. Export success, failure, skip, cancellation, or retry never changes BatchImage or Batch state. ExportJob freezes a schema-versioned naming-policy snapshot before it starts.
 
@@ -19,6 +19,7 @@ ExportJob and ExportItem own all export states. ExportItem references a Candidat
 - Export can be retried/repeated/audited without corrupting processing history.
 - API, database, UI, diagrams, and reconciliation must maintain two explicit lifecycles.
 - Approval supersession after historical export does not erase prior export facts.
+- Reopening preserves all prior candidates, decisions, and exports; a new candidate requires a new human decision in the new cycle.
 
 ## Rejected Alternatives
 

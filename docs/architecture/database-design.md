@@ -23,15 +23,15 @@ Session lookup indexes token hash; active-session queries index `(user_id, revok
 | `source_preview_artifacts` | id, source_observation_id, generation_version, storage_key, sha256, bytes, width, height, mime_type, created_at |
 | `presets` | id, name unique, description |
 | `preset_revisions` | id, preset_id, revision, schema_version, parameters JSONB, created_by, created_at; unique(preset_id, revision) |
-| `batches` | id, storage_root_id, name, source_prefix/display prefix, preset_revision_id, preset_snapshot JSONB, state, scan_cursor JSONB, derived counts, requested_by, timestamps |
+| `batches` | id, storage_root_id, name, source prefix, preset revision/snapshot, state, scan cursor/counts, review_cycle integer default 1, reopened_at nullable, reopened_by_user_id nullable FK, reopen_reason text/JSONB nullable, requested_by, created_at, updated_at |
 | `batch_images` | id, batch_id, source_observation_id, ordinal, state, selected_candidate_id nullable, row_version, timestamps |
-| `processing_runs` | id, batch_image_id, source_observation_id, retry_of_run_id, attempt_no, state, idempotency_key, preset_revision_id/snapshot, subject_mode, engine/model refs, lease token/expiry, timings, error code/details JSONB |
-| `candidate_versions` | id UUID, processing_run_id, batch_image_id, version_no, image/mask keys/checksums/sizes, media properties, QC schema/data JSONB, created_at |
-| `review_decisions` | id, batch_image_id, candidate_version_id, actor_id, decision, reason code/text, supersedes_id, correlation_id, created_at |
+| `processing_runs` | id, batch_image_id, source_observation_id, retry_of_run_id, attempt_no, review_cycle, state, idempotency_key, preset revision/snapshot, subject_mode, engine/model refs, lease token/expiry, timings, error details |
+| `candidate_versions` | id UUID, processing_run_id, batch_image_id, output_index, version_no, image/mask keys/checksums/sizes, media properties, QC schema/data JSONB, created_at |
+| `review_decisions` | id, batch_image_id, candidate_version_id, actor_id, review_cycle, decision, reason code/text, supersedes_id, correlation_id, created_at |
 
 `preset_revisions.parameters` is schema-validated. It includes processing bounds and:
 
-- `subject_mode`: one of `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, `manual_subject_selection_required`;
+- `subject_mode`: one of `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, `manual_subject_review_required`;
 - `shadow_enabled` (default false), `shadow_opacity`, `shadow_blur_ratio`, `shadow_offset_x`, `shadow_offset_y`, `shadow_color`, and `shadow_spread`.
 
 The Batch and ProcessingRun snapshots preserve the exact validated values even if preset presentation metadata changes.
@@ -44,7 +44,7 @@ The Batch and ProcessingRun snapshots preserve the exact validated values even i
 | `export_items` | id, export_job_id, batch_image_id, candidate_version_id, destination key/normalized key, state, checksum/media facts, lease data, error fields, timestamps |
 | `model_registry_entries` | id, engine/name/version, expected SHA-256, source/license metadata, requirements JSONB; unique(engine,name,version) |
 | `model_installations` | id, registry id, installation ref, actual SHA-256, status, verified at, capabilities JSONB |
-| `processing_events` | id, occurred_at, subject type/id, event type, actor/task/correlation, schema version, payload JSONB |
+| `processing_events` | id, occurred_at, subject type/id, event type, actor/task/correlation, review_cycle nullable, schema version, payload JSONB |
 | `outbox_messages` | id, topic, aggregate type/id, payload JSONB, available_at, attempts, claimed_until, published_at |
 | `idempotency_records` | id, actor_id, command type/key/request hash, resource type/id, status, expires_at |
 
@@ -67,9 +67,8 @@ processing_runs:
   UNIQUE (id, batch_image_id)
 
 candidate_versions:
-  UNIQUE (processing_run_id)
   UNIQUE (id, batch_image_id)
-  UNIQUE (processing_run_id, batch_image_id)
+  UNIQUE (processing_run_id, output_index)
   UNIQUE (batch_image_id, version_no)
   FOREIGN KEY (processing_run_id, batch_image_id)
     REFERENCES processing_runs (id, batch_image_id)
@@ -87,11 +86,12 @@ export_items:
     REFERENCES candidate_versions (id, batch_image_id)
 ```
 
-The circular nullable selected-candidate FK is created deferrable or added after table creation; a candidate delete is restricted. Candidate-to-run composite FK proves the run belongs to the same BatchImage. Application transactions additionally verify effective human approval when reserving ExportItem.
+The circular nullable selected-candidate FK is created deferrable or added after table creation; a candidate delete is restricted. Candidate-to-run composite FK proves the run belongs to the same BatchImage. ReviewDecision uses the same composite parent check. ExportItem uses it and transactionally verifies that the candidate is the effective human-approved selection for that BatchImage. Cross-parent selection/review/export references are rejected by PostgreSQL even if application validation is bypassed.
 
 Other rules:
 
 - `processing_runs`: unique idempotency key and `(batch_image_id, attempt_no)`.
+- `batches`: CHECK `review_cycle >= 1`; reopen actor/time/reason must be jointly present when a closed cycle has been reopened.
 - `source_preview_artifacts`: unique `(source_observation_id, generation_version)`; checksum exactly 32 bytes; positive dimensions.
 - `export_items`: destination reservation uniqueness is enforced by a root/destination reservation design selected in migrations; denormalizing root id onto the item is acceptable to support `UNIQUE(storage_root_id, normalized_destination_key)`.
 - `idempotency_records`: unique `(actor_id, command_type, key)`.
@@ -103,11 +103,17 @@ Do not use unprotected `MAX(version_no) + 1`. Finalization:
 
 1. conditionally validates the run lease/idempotency;
 2. obtains a short `FOR UPDATE` lock on BatchImage;
-3. returns the existing candidate if this run already finalized;
+3. returns the existing candidate if this run/output slot already finalized;
 4. reads the current highest version under that lock and selects the next display number (or uses a locked counter on BatchImage);
-5. inserts CandidateVersion UUID plus version number, updates run/BatchImage, and emits outbox/event in one transaction.
+5. inserts CandidateVersion UUID, output index, and version number; completes the run/updates BatchImage after all expected outputs; emits outbox/event in one transaction.
 
 Concurrent distinct runs serialize at the BatchImage lock. The unique constraint is the final guard. Transaction rollback may create gaps if a counter strategy is used; display sequences are gap-tolerant.
+
+## Controlled Reopen Transaction
+
+`ReprocessBatchImage` uses the API idempotency record and locks Batch before BatchImage to avoid deadlocks. It validates authorization, required storage, Batch/BatchImage eligibility, and absence of an equivalent outstanding request. If Batch is `review_completed` or `partially_completed`, it increments `review_cycle`, transitions Batch to `processing`, and sets reopen actor/time/reason. If Batch is already `processing`, it retains state/cycle; if `awaiting_review`, it transitions to `processing` while retaining the cycle. It then creates ProcessingRun with that cycle, moves BatchImage to `reprocess_queued`, clears the effective selected candidate for the new cycle, inserts `batch_reopened` when applicable plus `batch_image_reprocess_requested` ProcessingEvent/outbox facts carrying the cycle, and commits atomically.
+
+The same idempotency key/request hash returns the original run/cycle. Concurrent requests for different images serialize on Batch; after the first reopen, later requests observe `processing` and cannot increment again. `cancelled`/`failed` Batches reject the normal command. CandidateVersion, ReviewDecision, and completed ExportJob rows are never updated or deleted by reopening.
 
 ## Indexes
 

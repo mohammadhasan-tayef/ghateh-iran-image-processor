@@ -31,9 +31,11 @@ sequenceDiagram
         API-->>UI: BatchImage rejected
     else Reprocess
         R->>UI: Select preset/engine + reason
-        UI->>API: POST decision
-        API->>DB: Decision + new run + reprocess_queued
+        UI->>API: POST /batch-images/{id}/reprocess + idempotency key
+        API->>DB: Lock Batch/Image; decision + run + reprocess_queued
+        API->>DB: If closed: Batch processing + review_cycle increment once
         DB-->>Q: Publish run id
+        API-->>UI: Batch/Image states + run id + review_cycle
     end
 
     Note over DB: Batch may reach review_completed before any export
@@ -41,5 +43,6 @@ sequenceDiagram
     API->>DB: Validate human approval; create independent job/items
     DB-->>Q: Publish ExportItem ids
     Q-->>DB: Export worker records item/job outcome only
+    Note over DB: Reopen preserves prior decisions/exports; new candidate needs new review
     Note over DB: BatchImage remains human_approved on export success or failure
 ```

@@ -27,7 +27,11 @@ stateDiagram-v2
     awaiting_review --> review_completed
     awaiting_review --> partially_completed
     awaiting_review --> cancelled
+    review_completed --> processing: explicit reprocess; cycle +1
+    partially_completed --> processing: explicit reprocess; cycle +1
 ```
+
+`review_completed` and `partially_completed` are closed but reopenable only through the authorized atomic reprocess command. Workers cannot take these transitions. `cancelled` and `failed` remain permanently terminal for normal operations.
 
 ## BatchImage
 

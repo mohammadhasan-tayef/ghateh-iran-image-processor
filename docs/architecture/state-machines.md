@@ -28,8 +28,14 @@ States: `created`, `scanning`, `scan_paused`, `queued`, `processing`, `awaiting_
 | awaiting_review | review_completed | All non-cancelled items are approved/rejected; no failed/cancelled items |
 | awaiting_review | partially_completed | All remaining items resolved and at least one is processing-failed/cancelled |
 | awaiting_review | cancelled | Cancel unresolved items and close batch |
+| review_completed | processing | Explicit authorized `ReprocessBatchImage` command reopens a closed review cycle |
+| partially_completed | processing | Explicit authorized `ReprocessBatchImage` command reopens a closed review cycle |
 
-Resolution set for a non-cancelled BatchImage: `human_approved`, `rejected`, or `processing_failed`. Roll-up precedence is: while unresolved work exists, use an active state; when resolved, any `processing_failed` or `cancelled` member yields `partially_completed`, otherwise `review_completed`. Rejection is a successful review resolution. `review_completed`, `partially_completed`, `cancelled`, and `failed` are terminal for normal commands.
+Resolution set for a non-cancelled BatchImage: `human_approved`, `rejected`, or `processing_failed`. Roll-up precedence is: while unresolved work exists, use an active state; when resolved, any `processing_failed` or `cancelled` member yields `partially_completed`, otherwise `review_completed`. Rejection is a successful review resolution.
+
+`review_completed` and `partially_completed` are closed-cycle states, not permanently terminal records. They reopen only through the explicit authorized reprocess command, which atomically locks Batch and BatchImage; validates permissions, root availability, and reprocess eligibility; creates/registers the new ProcessingRun request; moves BatchImage to `reprocess_queued`; moves Batch to `processing`; increments `review_cycle`; records actor/time/reason; emits an audit/domain event containing the new cycle; and commits the outbox intent. A worker delivery alone cannot perform either reopen transition.
+
+If Batch is already `processing`, a valid reprocess command joins the current open cycle without a Batch transition or cycle increment. If it is `awaiting_review`, the command moves it to `processing` but keeps the current cycle. Multiple reprocess requests in that open cycle likewise do not increment it. Concurrent requests serialize on the Batch row: only the first command that observes a closed-cycle state increments the cycle. `cancelled` and `failed` are permanently terminal for normal operations and reject this command. Each newly produced CandidateVersion requires a new human ReviewDecision before the reopened Batch can close again.
 
 Export has no effect on Batch state. The UI derives approved, rejected, unresolved, failed/cancelled, and exported-at-least-once counts independently.
 
@@ -48,7 +54,7 @@ States: `discovered`, `registered`, `queued`, `processing`, `candidate_ready`, `
 | queued | processing_failed | Dispatch/configuration retry policy exhausted |
 | queued | cancelled | Cancel before claim |
 | processing | queued | Recover same nonterminal run after retryable worker/storage failure |
-| processing | candidate_ready | Run finalizes one immutable CandidateVersion |
+| processing | candidate_ready | Run finalizes its one-or-more expected immutable CandidateVersion outputs (normally one in MVP) |
 | processing | processing_failed | Non-retryable processing failure or retry exhaustion |
 | processing | cancelled | Cooperative cancellation before candidate commit |
 | candidate_ready | needs_review | QC/provenance complete and review item published |
@@ -61,7 +67,7 @@ States: `discovered`, `registered`, `queued`, `processing`, `candidate_ready`, `
 | reprocess_queued | cancelled | Cancel queued reprocessing |
 | processing_failed | reprocess_queued | Authorized explicit retry creates a new run |
 
-`human_approved`, `rejected`, and `processing_failed` are review resolutions but may leave through an explicit reprocess command. `cancelled` is terminal. Export reservation, completion, failure, skip, cancellation, and re-export never change BatchImage state. A historical export remains auditable if a later review supersedes the approval.
+`human_approved`, `rejected`, and `processing_failed` are review resolutions but may leave only through the documented `ReprocessBatchImage` command. That command clears the effective current selection/approval for the new cycle while preserving immutable CandidateVersions and ReviewDecisions. `cancelled` is permanently terminal. Export reservation, completion, failure, skip, cancellation, and re-export never change BatchImage or reopen Batch. Historical completed ExportJobs and previously exported approved versions remain immutable facts.
 
 ## ProcessingRun
 
@@ -69,7 +75,7 @@ States: `pending`, `running`, `succeeded`, `failed`, `cancelled`.
 
 - `pending → running`: conditional claim with lease/fencing token.
 - `pending → cancelled`: cancellation before claim.
-- `running → succeeded`: under a short BatchImage lock, artifacts verify, UUID CandidateVersion and safe version number insert, then run/BatchImage transition commit.
+- `running → succeeded`: all expected output slots finalize under short BatchImage locks with UUID CandidateVersions/safe version numbers, then run/BatchImage transition commits; MVP normally has one slot.
 - `running → failed|cancelled`: typed terminal outcome before candidate commit.
 - `running → pending`: stale-lease recovery only when no candidate exists.
 - A retry after terminal failure creates a new run linked by `retry_of_run_id`; terminal states never reopen.
@@ -109,5 +115,7 @@ A verified existing final lets redelivery complete idempotently. `skipped` is a 
 ## Invalid Transitions and Retries
 
 An idempotently equivalent duplicate returns the current resource; a conflicting stale command returns `409 state_conflict` with expected/current state. Only classified transient infrastructure failures receive bounded exponential retry with jitter. Path-security, source-integrity, validation, deterministic model/decode, authenticity, and missing-model failures require explicit action. Retry mechanics are authoritative in [worker and queue design](worker-and-queue-design.md).
+
+Reprocess validation rejects cancelled/failed Batches, cancelled or otherwise ineligible BatchImages, duplicate outstanding requests, unauthorized actors, and unavailable required storage. An identical idempotency key returns the original ProcessingRun and review cycle without another transition/event. Any task delivered for a closed Batch without a committed matching reprocess intent/current cycle is rejected or reconciled without changing Batch state.
 
 See the [state diagrams](../diagrams/state-machines.md).

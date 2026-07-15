@@ -33,9 +33,9 @@ Every immutable preset revision defines one `SubjectMode`, captured in the Batch
 - `product_with_packaging`
 - `multi_component_product`
 - `keep_all_foreground_objects`
-- `manual_subject_selection_required`
+- `manual_subject_review_required`
 
-Multiple disconnected real components are valid only for a compatible mode. Background removal does not decide business subject membership. Ambiguous interpretation, inconsistent component count, or a manual-selection mode must route to human review; the pipeline never invents a missing subject.
+Multiple disconnected real components are valid only for a compatible mode. Background removal does not decide business subject membership. Ambiguous interpretation, inconsistent component count, or `manual_subject_review_required` must route to human review; automatic segmentation may still run, but the reviewer must validate that the intended sellable subject was preserved. The pipeline never invents a missing subject. Interactive manual mask editing and subject painting are not part of the MVP.
 
 ## Primary Workflow
 
@@ -80,6 +80,13 @@ Small ad-hoc browser upload is a later, secondary workflow and is never the high
 - For rollout one, every production export requires an explicit human approval. Automated scoring cannot create an approval or production-final image. Future auto-approval requires a later ADR and benchmark evidence.
 - Record actor, timestamp, reason, selected version, and correlation ID for every decision.
 
+### Reprocessing and review cycles
+
+- Every Batch starts with `review_cycle = 1`. `review_completed` and `partially_completed` close the current cycle but may be reopened only by an authorized explicit BatchImage reprocess command.
+- Reopening creates a new ProcessingRun, moves the image to `reprocess_queued`, moves Batch to `processing`, increments the cycle once, records actor/time/reason, and emits an audit event in one transaction.
+- Reprocess requests added while Batch is already `processing` or `awaiting_review` stay in the current cycle; `awaiting_review` moves to `processing` so the run may execute. Idempotent repeats and additional requests in that open cycle do not increment again.
+- Cancelled/failed Batches cannot reopen through normal reprocessing. Prior CandidateVersions, ReviewDecisions, and ExportJobs remain immutable; the new candidate requires a new human decision before Batch closes again.
+
 ### Export
 
 - Export is independent from BatchImage and Batch completion state.
@@ -118,6 +125,12 @@ Small ad-hoc browser upload is a later, secondary workflow and is never the high
 - Session revocation, idle/absolute expiry, rotation, logout-all, password-reset revocation, CSRF, and fixed permission matrix pass integration tests.
 - Persian filenames/paths, `fa-IR` RTL layouts, LTR technical fields, timezone display, and direction-independent review hotkeys pass acceptance tests.
 - Known subject/segmentation/shadow hard cases are warned and reviewed; no score creates a production approval.
+- Reprocessing an approved image in a `review_completed` Batch atomically creates one run, changes Batch/Image to `processing`/`reprocess_queued`, and increments `review_cycle` exactly once; an idempotent repeat creates neither another run nor increment.
+- Reprocessing a processing-failed image in a `partially_completed` Batch follows the same controlled reopen; two requests in one open cycle increment only once.
+- Cancelled/failed Batch reprocess requests and worker tasks without a valid current-cycle command are rejected without reopening.
+- Reopen preserves all prior CandidateVersions, ReviewDecisions, and completed ExportJobs; every new candidate receives a new human decision.
+- `manual_subject_review_required` always routes an automatically segmented candidate to human review, never auto-finalizes it, and allows another preset/engine through reprocess without claiming an interactive mask editor.
+- Cross-BatchImage selected candidate, ReviewDecision candidate, and ExportItem candidate references are rejected; ExportItem also requires the effective approved candidate.
 
 ## Out of Scope for MVP
 
@@ -128,6 +141,7 @@ Small ad-hoc browser upload is a later, secondary workflow and is never the high
 - JWT browser authentication, OAuth, public internet exposure, and real-time collaborative editing
 - Microservices, Kubernetes, Kafka, GraphQL, event sourcing, image blobs in PostgreSQL, and distributed multi-region operation
 - Automatic production approval and S3/object storage in the initial release
+- Interactive manual mask editing and subject painting are not part of the MVP; adding a mask/polygon/subject editor requires a future ADR and implementation sprint
 
 ## Remaining Product Questions
 

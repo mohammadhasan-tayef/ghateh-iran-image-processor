@@ -47,9 +47,27 @@ Folder selection continues to submit only `root_id` and `relative_path`. A missi
 - `GET /batches/{id}/images` — cursor-paginated membership filters
 - `GET /batch-images/{id}` — exact SourceObservation, processing state, versions, effective review, export-history summary
 - `GET /source-observations/{id}` — authorized immutable observation/checksum/availability facts
-- `POST /batch-images/{id}/reprocess`, `POST /batch-images/{id}/cancel`
+- `POST /batch-images/{id}/reprocess` — authorized `ReprocessBatchImage` command; may atomically reopen a closed Batch review cycle
+- `POST /batch-images/{id}/cancel`
 
-Preset revision schema includes a required `subject_mode` and optional deterministic shadow fields: `shadow_enabled` (default false), `shadow_opacity`, `shadow_blur_ratio`, `shadow_offset_x`, `shadow_offset_y`, `shadow_color`, and `shadow_spread`. Server validation enforces bounded values and supported neutral colors; the ProcessingRun captures the validated snapshot.
+Preset revision schema requires `subject_mode` from `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, or `manual_subject_review_required`, plus optional deterministic shadow fields: `shadow_enabled` (default false), `shadow_opacity`, `shadow_blur_ratio`, `shadow_offset_x`, `shadow_offset_y`, `shadow_color`, and `shadow_spread`. Server validation enforces bounded values and supported neutral colors; the ProcessingRun captures the validated snapshot. `manual_subject_review_required` still runs automatic segmentation but always routes its candidate to review. It does not imply an interactive mask/subject editor.
+
+### Controlled reprocess contract
+
+`POST /batch-images/{id}/reprocess` accepts a required reason plus an optional alternate `preset_revision_id` and/or segmentation engine choice. It requires `Idempotency-Key` and the appropriate current resource version. The application command—not a worker—locks Batch then BatchImage and validates authorization/state/storage. If Batch is `review_completed` or `partially_completed`, it first increments `review_cycle` once and reopens Batch to `processing`; it then creates the ProcessingRun in the resulting current cycle, moves the image to `reprocess_queued`, clears the effective selected candidate, and commits the audit event/outbox intent atomically. Existing candidates, decisions, and exports remain historical records.
+
+```json
+{
+  "batch_image_id": "UUID",
+  "batch_id": "UUID",
+  "processing_run_id": "UUID",
+  "batch_image_state": "reprocess_queued",
+  "batch_state": "processing",
+  "review_cycle": 2
+}
+```
+
+If Batch is already `processing`, the request joins its current cycle without transition/increment. If `awaiting_review`, it transitions to `processing` but retains the cycle. Concurrent requests serialize so only the first closed-cycle reopen increments. The same idempotency key and request returns the same run/response without another cycle increment. Stable error codes include `BATCH_NOT_REPROCESSABLE`, `BATCH_IMAGE_NOT_REPROCESSABLE`, `REPROCESS_ALREADY_REQUESTED`, `FORBIDDEN`, and `STORAGE_UNAVAILABLE`; the frontend maps them to Persian messages.
 
 ## Candidates, Review, and Media
 
@@ -76,7 +94,7 @@ The naming snapshot validates source/SKU mode, sanitization, Unicode behavior, c
 
 ## Commands, Idempotency, and Concurrency
 
-Creation returns `201`; accepted asynchronous commands return `202` with the authoritative resource. Mutations include `Idempotency-Key` and state-sensitive commands use `If-Match`. The same key/request hash returns the prior resource; reused key with different content is `409`. Candidate/export concurrency is governed by database locks and composite constraints, not client sequencing.
+Creation returns `201`; accepted asynchronous commands return `202` with the authoritative resource. Mutations include `Idempotency-Key` and state-sensitive commands use `If-Match`. The same key/request hash returns the prior resource; reused key with different content is `409`. Candidate/export/reopen concurrency is governed by database locks and composite constraints, not client sequencing.
 
 Clients poll resources with backoff in MVP; optional SSE may provide hints but PostgreSQL queries remain authoritative. Batch review completion never waits for exports.
 

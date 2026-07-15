@@ -40,4 +40,22 @@ sequenceDiagram
     UI->>API: GET paginated batch/review metrics
     API->>DB: Query authoritative states + independent export counts
     API-->>UI: Current resources
+
+    opt Explicit reprocess of resolved image
+        O->>UI: Request reprocess with reason/preset/engine
+        UI->>API: POST /batch-images/{id}/reprocess + Idempotency-Key
+        API->>DB: Lock Batch then BatchImage; validate actor/state/storage/key
+        alt Batch cycle is closed
+            API->>DB: review_cycle + 1; Batch processing; reopen metadata
+        else Batch cycle is already open
+            API->>DB: Keep review_cycle; awaiting_review to processing if needed
+        end
+        API->>DB: Create ProcessingRun; image reprocess_queued; event + outbox
+        API-->>UI: run id + Batch/Image states + review_cycle
+        DB-->>Q: Publish committed current-cycle run id
+        Q->>W: Deliver reprocess run id
+        W->>DB: Validate run/cycle/open Batch; claim or reject safely
+    end
+
+    Note over W,DB: A worker cannot reopen a closed Batch
 ```

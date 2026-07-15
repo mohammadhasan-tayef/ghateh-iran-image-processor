@@ -7,6 +7,7 @@ erDiagram
     USER ||--o{ USER_SESSION : owns
     USER ||--o{ REVIEW_DECISION : makes
     USER ||--o{ EXPORT_JOB : requests
+    USER |o--o{ BATCH : reopens
     STORAGE_ROOT ||--o{ IMAGE_ASSET : catalogs
     STORAGE_ROOT ||--o{ SOURCE_OBSERVATION : observes
     STORAGE_ROOT ||--o{ BATCH : contains
@@ -15,16 +16,19 @@ erDiagram
     PRESET ||--|{ PRESET_REVISION : versions
     PRESET_REVISION ||--o{ BATCH : configures
     BATCH ||--o{ BATCH_IMAGE : includes
-    SOURCE_OBSERVATION ||--o{ BATCH_IMAGE : exact_source_for
+    BATCH_IMAGE }o--|| SOURCE_OBSERVATION : uses_source
     BATCH_IMAGE ||--o{ PROCESSING_RUN : attempts
-    PROCESSING_RUN ||--o| CANDIDATE_VERSION : produces
+    PROCESSING_RUN ||--o{ CANDIDATE_VERSION : produces
     PRESET_REVISION ||--o{ PROCESSING_RUN : snapshots
     MODEL_REGISTRY_ENTRY ||--o{ MODEL_INSTALLATION : installed_as
     MODEL_INSTALLATION ||--o{ PROCESSING_RUN : executes
-    BATCH_IMAGE ||--o{ CANDIDATE_VERSION : versions
-    BATCH_IMAGE ||--o{ REVIEW_DECISION : receives
-    CANDIDATE_VERSION ||--o{ REVIEW_DECISION : evaluated_by
+    BATCH_IMAGE ||--o{ CANDIDATE_VERSION : owns
+    BATCH_IMAGE |o--o| CANDIDATE_VERSION : selects
+    BATCH_IMAGE ||--o{ REVIEW_DECISION : records
+    CANDIDATE_VERSION ||--o{ REVIEW_DECISION : receives
     EXPORT_JOB ||--o{ EXPORT_ITEM : contains
-    BATCH_IMAGE ||--o{ EXPORT_ITEM : approved_membership
-    CANDIDATE_VERSION ||--o{ EXPORT_ITEM : exported_version
+    BATCH_IMAGE ||--o{ EXPORT_ITEM : export_history
+    EXPORT_ITEM }o--|| CANDIDATE_VERSION : exports
 ```
+
+The ownership and selected-candidate relationships are intentionally separate. `batch_images.selected_candidate_id` must reference a CandidateVersion owned by that same BatchImage. ReviewDecision must reference a CandidateVersion belonging to its BatchImage. ExportItem must reference the exact human-approved selected CandidateVersion for its BatchImage. Mermaid cannot fully express those conditional same-parent rules, so PostgreSQL enforces them with the composite keys/FKs defined in [database design](../architecture/database-design.md), plus transactional approval validation.

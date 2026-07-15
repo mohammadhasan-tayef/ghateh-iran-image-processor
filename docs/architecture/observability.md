@@ -4,7 +4,7 @@ This document defines local operational telemetry. PostgreSQL resources remain t
 
 ## Structured Logs
 
-API, dispatcher, worker, and maintenance processes emit structured JSON to stdout and rotated local files through deployment configuration. Common fields are timestamp UTC, severity, service/process, environment/build, event name, correlation ID, request/command/task/operation ID, actor/session id where appropriate, aggregate type/id, batch/BatchImage/source-observation/run/export IDs, state transition, duration, attempt, queue, engine/model, device, and normalized error category. Session identifiers are internal UUIDs only; cookie, token, CSRF, IP, and raw user-agent values are never logged.
+API, dispatcher, worker, and maintenance processes emit structured JSON to stdout and rotated local files through deployment configuration. Common fields are timestamp UTC, severity, service/process, environment/build, event name, correlation ID, request/command/task/operation ID, actor/session id where appropriate, aggregate type/id, batch/BatchImage/source-observation/run/export IDs, `review_cycle`, state transition, duration, attempt, queue, engine/model, device, and normalized error category. Session identifiers are internal UUIDs only; cookie, token, CSRF, IP, and raw user-agent values are never logged.
 
 Do not log image bytes, credentials/tokens, database URLs, host absolute paths, unrestricted logical keys, raw EXIF, or full exception payloads containing them. Development stack traces are not client responses. Log sampling must never suppress security events, state transitions, terminal failures, review decisions, or exports.
 
@@ -24,6 +24,7 @@ Each pipeline stage records queue wait, source-observation verification, read/de
 - Workers online/busy, claims, retries, stale leases, task duration, process recycling
 - Batch scan rate, pending/processing/review/failure counts, oldest work age
 - Batch approved/rejected/unresolved/processing-failed/cancelled counts and independent exported-at-least-once count
+- Batch reopen count, current review cycle, reopen actor/reason category, rejected stale-cycle tasks, and oldest open-cycle age
 - Pipeline stage latency, engine failure/warning rate, CPU/RAM/GPU memory/utilization where supported
 - Root availability, read/write latency, free bytes, disconnects, partial/orphan files
 - Review queue age, decisions/hour, rejection/reprocess reasons; never use as employee performance scoring without policy

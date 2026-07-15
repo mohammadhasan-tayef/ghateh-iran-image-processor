@@ -57,7 +57,7 @@ Image/Batch state never contains export state. Export reads an approved selected
 - **Scan:** a short transaction creates Batch; scan tasks insert SourceObservations and BatchImages in chunks and stream hashes. Changed same-path content creates a new observation.
 - **Process:** claim a run, read its exact observation, execute non-generative stages, atomically finalize artifacts, then lock BatchImage briefly to allocate candidate `version_no` and commit candidate/run/image state.
 - **Review:** use SourcePreviewArtifact plus candidate/mask; lock BatchImage, record human decision, and select candidate. Automated scoring only orders work.
-- **Batch closure:** reconcile member processing/review resolutions to `review_completed` or `partially_completed`; export counts are derived separately.
+- **Batch closure and controlled reopen:** reconcile member processing/review resolutions to a closed-cycle `review_completed` or `partially_completed`. Only the authorized `ReprocessBatchImage` use case may atomically create a run, move the image to `reprocess_queued`, reopen Batch to `processing`, increment `review_cycle` once, and record actor/reason/event. Reprocess commands while already `processing` retain state/cycle; `awaiting_review` returns to `processing` in the same cycle. Workers cannot reopen a Batch.
 - **Export:** snapshot naming policy, reserve approved candidate/destination, flatten to production PNG (2000 × 2000, 8-bit sRGB RGB, no alpha, white), atomically finalize, and update ExportItem/Job only.
 
 ## Scaling Seams
@@ -75,7 +75,7 @@ Shared logical storage is required before adding worker hosts. Root-level user s
 | Failure | Required behavior |
 |---|---|
 | Browser/API restarts | Server session remains valid unless expired/revoked; DB transaction rolls back and outbox resumes |
-| Worker dies | Stale lease reconciliation retries/fails the ProcessingRun; stale candidate finalizer is fenced |
+| Worker dies | Stale lease reconciliation retries/fails the ProcessingRun within its recorded review cycle; stale candidate finalizer is fenced |
 | Redis is lost | Rebuild publish intent from PostgreSQL; no business/session truth is lost |
 | Configured mount missing | Root is unavailable; new scans/reads/writes are blocked with typed retryable status |
 | Drive disconnects during scan | Batch moves to `scan_paused`; cursor/observations persist |
@@ -85,6 +85,7 @@ Shared logical storage is required before adding worker hosts. Root-level user s
 | Database unavailable | Fail closed; do not create unrecorded work, sessions, candidates, decisions, or exports |
 | File write precedes DB commit | Reconcile by operation ID/checksum; adopt only after invariant verification |
 | Model missing/corrupt | Prevent dispatch and record typed configuration failure |
+| Task targets closed Batch without valid reopen | Reject/reconcile the task; do not create a run intent or change Batch/review cycle |
 
 ## Risks and References
 

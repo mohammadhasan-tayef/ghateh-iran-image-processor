@@ -38,16 +38,16 @@ Sprint numbers are architectural increments, not fixed calendar durations. Each 
 ## Sprint 4 — Candidate Pipeline and Automated QC
 
 - **Entry:** Sprint 3 feasibility gate passes; framing/color thresholds and fixture baselines approved.
-- **Deliverables:** versioned SubjectMode-aware stages, atomic candidate/mask artifacts, conservative correction, optional default-off deterministic contact shadow, 2000 × 2000 candidate composition, QC vector/warnings, provenance, concurrency-safe CandidateVersion allocation.
-- **Tests:** subject/shadow/stage unit/property, concurrent finalization, golden/tolerance, source immutability, orphan/partial recovery, CPU/hardware variance.
+- **Deliverables:** versioned SubjectMode-aware stages including `manual_subject_review_required`, atomic candidate/mask artifacts, conservative correction, optional default-off deterministic contact shadow, 2000 × 2000 candidate composition, QC vector/warnings, provenance, concurrency-safe CandidateVersion allocation. No interactive mask editor.
+- **Tests:** mandatory subject-review routing, shadow/stage unit/property, concurrent finalization, golden/tolerance, source immutability, orphan/partial recovery, CPU/hardware variance.
 - **Exit:** candidates are reproducible/explainable and unsafe hard cases route warnings; no automatic final export.
 - **Rollback:** deactivate preset/pipeline revision; retain artifacts/history.
 
 ## Sprint 5 — Human Review
 
 - **Entry:** decision/reason policy and accessibility acceptance agreed.
-- **Deliverables:** paginated review queue, authorized SourcePreviewArtifact/candidate/mask media, Persian RTL side-by-side/version view, direction-independent keyboard flow, approve/reject/reprocess/select previous, explicitly selected bulk review, immutable decisions.
-- **Tests:** fixed-role authorization, state races, RTL/accessibility/hotkeys, large queue UI, candidate supersession/audit.
+- **Deliverables:** paginated review queue, authorized SourcePreviewArtifact/candidate/mask media, Persian RTL side-by-side/version view, direction-independent keyboard flow, approve/reject/reprocess/select previous, controlled Batch reopen with review-cycle audit, explicitly selected bulk review, immutable decisions. Interactive mask painting/polygon subject editing remains out of scope.
+- **Tests:** fixed-role authorization, controlled reopen/idempotency/cycle fencing, state races, RTL/accessibility/hotkeys, large queue UI, candidate supersession/audit/export-history preservation.
 - **Exit:** every candidate can receive a traceable human decision; rollout-one mandatory-review policy enforced.
 - **Rollback:** disable review mutations; preserve decisions and processing.
 
@@ -69,4 +69,4 @@ Sprint numbers are architectural increments, not fixed calendar durations. Each 
 
 ## Cross-Sprint Rules
 
-Schema/artifact changes use expand/migrate/contract and immutable revisions. A sprint cannot silently regenerate baselines, mutate sources/candidates, merge export state into BatchImage, replace PostgreSQL truth with Redis/Celery, weaken mandatory human approval, or begin its successor to conceal unmet exit criteria. Each seam is implemented only with its owning security/recovery tests.
+Schema/artifact changes use expand/migrate/contract and immutable revisions. A sprint cannot silently regenerate baselines, mutate sources/candidates, let a worker reopen a Batch, repeatedly increment one open review cycle, merge export state into BatchImage, imply an unplanned mask editor, replace PostgreSQL truth with Redis/Celery, weaken mandatory human approval, or begin its successor to conceal unmet exit criteria. Each seam is implemented only with its owning security/recovery tests.

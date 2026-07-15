@@ -10,7 +10,7 @@ Testing prioritizes source safety, path/session authorization, lifecycle separat
 - UserSession idle/absolute expiry, session-version invalidation, rotation, logout, logout-all, password reset/role/status revocation, CSRF decisions.
 - SourceObservation preliminary identity, streamed hash state, same-path changed content, and exact BatchImage binding.
 - Composite same-BatchImage candidate/review/export invariants and candidate sequence allocation policy.
-- SubjectMode rules and preset schema, including all shadow parameter bounds/default disabled.
+- SubjectMode rules including `manual_subject_review_required`, mandatory review routing, and no interactive-editor claim; all shadow parameter bounds/default disabled.
 - Pipeline geometry, exact-white composition, source-preview permitted transforms, contact-shadow non-interference, and final RGB PNG validation.
 - Unicode/Persian path normalization/collision and logical/display key preservation.
 
@@ -41,6 +41,23 @@ Run simultaneous distinct reprocess finalizers for one BatchImage and duplicate 
 
 Kill API/worker/Redis/PostgreSQL, disconnect/remount/reuse drive letter, fill disk, reorder messages, expire leases, and race review/export/cancel. Assert SourceObservation remains exact, no partial final, Batch/BatchImage never adopt export failure, and every export remains explainable.
 
+## Controlled Reopen Tests
+
+- `review_completed` + `human_approved` + authorized reprocess: one atomic command creates ProcessingRun, moves Batch/Image to `processing`/`reprocess_queued`, increments `review_cycle` once, records actor/reason/event, and preserves prior records.
+- `partially_completed` + `processing_failed` follows the same reopen and single increment.
+- Two valid image reprocess requests in one reopened cycle create their own runs but increment the cycle only on the first closed-to-open transition.
+- Repeating the identical request/idempotency key returns the original run/cycle with no duplicate run, event, or increment.
+- A worker task for a closed Batch without a valid committed current-cycle reprocess run is rejected/reconciled; the worker never reopens Batch.
+- Normal reprocess on `cancelled` or `failed` Batch is rejected. Reprocessing while already `processing` retains state/cycle; while `awaiting_review`, Batch returns to `processing` without increment.
+- Reopening does not update/delete prior CandidateVersions, ReviewDecisions, selected-version history, or completed ExportJobs. A new candidate cannot close the cycle without a new human ReviewDecision.
+
+## Subject Review and Relational Integrity Tests
+
+- `manual_subject_review_required` runs segmentation when configured but always routes to `needs_review`; it never auto-finalizes/auto-approves or exposes mask painting/selection. Reprocess may choose another preset/engine.
+- Setting `selected_candidate_id` to another BatchImage's candidate fails the composite FK.
+- Creating ReviewDecision with a candidate from another BatchImage fails the composite FK.
+- Creating ExportItem with a wrong-parent, non-selected, or non-approved candidate is rejected by relational/application invariants.
+
 ## Localization, Accessibility, and Browser Tests
 
 Run primary `fa-IR` RTL flows for login, root/batch, review, export, and errors. Verify Persian font asset loading in its implementation sprint; LTR isolation for hashes, UUIDs, paths, filenames/extensions, model/version values; Persian Unicode filename round-trip; timezone display from UTC; focus order; screen labels; and direction-independent hotkeys. Test English technical error code to Persian message mapping.
@@ -51,4 +68,4 @@ On named baseline Windows 11/Docker Desktop/WSL2 CPU hardware, scan synthetic 10
 
 ## Quality Gates
 
-Require formatting/link/diagram checks; no implementation in documentation sprints; unit/integration/security tests; migration checks when implementation starts; no unapproved golden change; source/path/session/role/RTL/output/recovery suites; model/dependency provenance; and backup restore. Mandatory human approval is asserted end-to-end: no score can create approval or production export.
+Require formatting/link/diagram checks; no implementation in documentation sprints; unit/integration/security tests; migration checks when implementation starts; no unapproved golden change; source/path/session/role/RTL/output/reopen/recovery suites; model/dependency provenance; and backup restore. Mandatory human approval is asserted end-to-end: no score can create approval or production export.

@@ -8,7 +8,7 @@ This document is authoritative for processing stages, SubjectMode, authenticity 
 
 The validated preset snapshot includes:
 
-- `subject_mode`: `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, or `manual_subject_selection_required`;
+- `subject_mode`: `single_object`, `product_with_packaging`, `multi_component_product`, `keep_all_foreground_objects`, or `manual_subject_review_required`;
 - framing, segmentation, mask-refinement, correction, denoise, sharpening, encoding, and QC settings;
 - `shadow_enabled` (default false), `shadow_opacity`, `shadow_blur_ratio`, `shadow_offset_x`, `shadow_offset_y`, `shadow_color`, and `shadow_spread`.
 
@@ -18,7 +18,7 @@ Stages do not open arbitrary paths or persist business state. Each declares type
 
 1. **Verify source observation:** open through StorageBackend; re-stat and stream/check exact size/SHA-256; reject mutation/substitution; enforce decode limits.
 2. **Decode/orient:** verify signature, apply EXIF orientation, normalize to documented sRGB working space; source remains unchanged.
-3. **Evaluate SubjectMode:** establish expected subject composition. `manual_subject_selection_required` always records a manual-review requirement. No mode can recover absent/cropped components.
+3. **Evaluate SubjectMode:** establish expected subject composition. `manual_subject_review_required` permits automatic segmentation but always records mandatory subject-validation review. No mode can recover absent/cropped components.
 4. **Segment:** use BiRefNet Strategy primary; rembg only by explicit fallback/reprocess policy. Never silently blend engines.
 5. **Refine mask:** bounded morphology/edge feathering and hole preservation; retain raw/refined mask facts.
 6. **Subject/authenticity gates:** compare component count/topology/coverage with SubjectMode and detect clipping, lost holes, disconnected fine structures, uncertain foreground, or unintended hands/tools/background objects. Ambiguity routes to review; invalid/empty output fails processing.
@@ -30,7 +30,7 @@ Stages do not open arbitrary paths or persist business state. Each declares type
 12. **Compose candidate:** composite the unchanged placed product above optional shadow. Internal candidate may be RGBA when provenance/review needs it; display preview is white-backed.
 13. **Encode artifacts:** lossless candidate PNG plus optional grayscale/alpha mask and display preview; finalize atomically.
 14. **Quality checks:** validate format/geometry/background, subject-mode consistency, mask topology, clipping/margins, edge/blur/noise/color deltas, shadow limits, and checksums.
-15. **Finalize/route:** lock BatchImage briefly, insert CandidateVersion UUID/safe display sequence, commit provenance/QC, transition `candidate_ready`, then publish to `needs_review`.
+15. **Finalize/route:** lock BatchImage briefly per idempotent output slot, insert one-or-more CandidateVersion UUIDs/safe display sequences (normally one for MVP), commit provenance/QC, transition `candidate_ready` after expected outputs finalize, then publish to `needs_review`.
 
 ## DeterministicContactShadowStage
 
@@ -53,7 +53,7 @@ Background segmentation answers foreground likelihood, not which foreground obje
 - `product_with_packaging`: product and its intended packaging may remain; unrelated labels/tools do not.
 - `multi_component_product`: multiple physically present components are expected and preserved.
 - `keep_all_foreground_objects`: preserve all real foreground objects; still warn about photography-policy violations.
-- `manual_subject_selection_required`: no automatic subject completeness claim; human review is mandatory.
+- `manual_subject_review_required`: automatic segmentation may run, but a human must validate that the intended sellable subject remains. Reprocessing with another preset/engine is allowed. No interactive mask painting, polygon selection, or subject-editing tool exists in the MVP.
 
 Input should show one SKU and all required real parts. Hidden/cropped parts are never reconstructed. Thin cables, internal holes, transparent/white/dark products, reflective metal, packaging, and multiple disconnected objects receive specialized topology/contrast/highlight warnings. Text and geometry are never warped.
 
@@ -61,7 +61,7 @@ Input should show one SKU and all required real parts. Hidden/cropped parts are 
 
 Technical quality is a versioned vector: decodability/dimensions, foreground coverage/margins, clipping, exact background where applicable, mask uncertainty/topology, SubjectMode signals, edge halos, blur/noise/color deltas, shadow bounds, engine signals, and provenance completeness. A calibrated routing score may prioritize the review queue.
 
-Quality asks whether measurable rules passed. Engine confidence estimates model behavior. Neither guarantees semantic/product correctness. Every rollout-one candidate requires explicit human approval before any production export; no score or rule creates approval.
+Quality asks whether measurable rules passed. Engine confidence estimates model behavior. Neither guarantees semantic/product correctness. `manual_subject_review_required` is an unconditional review-routing rule regardless of score. Every rollout-one candidate requires explicit human approval before any production export; no score or rule creates approval.
 
 ## Production Export Encoding
 
