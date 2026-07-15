@@ -7,11 +7,52 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Python
+# Image datasets and local samples
+data/
+datasets/
+samples/raw/*
+!samples/raw/.gitkeep
+*.tif
+*.tiff
+*.bmp
+*.webp
+
+# Model weights and checkpoints
+models/
+weights/
+checkpoints/
+*.ckpt
+*.h5
+*.onnx
+*.pt
+*.pth
+*.safetensors
+
+# Generated outputs
+output/
+outputs/
+generated/
+results/
+samples/reference-output/*
+!samples/reference-output/.gitkeep
+
+# Python caches and environments
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Node dependencies and caches
+node_modules/
+.npm/
+.yarn/
+.pnpm-store/
+.next/
+.nuxt/
+coverage/
 
 # Environment and local configuration
 .env
@@ -22,6 +63,18 @@ venv/
 *.log
 tmp/
 temp/
+*.pid
+*.pid.lock
+
+# Local databases and runtime files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+run/
+runtime/
 
 # Build and test output
 build/
@@ -30,3 +83,12 @@ dist/
 .coverage
 htmlcov/
 
+# Archives
+*.7z
+*.bz2
+*.gz
+*.rar
+*.tar
+*.tgz
+*.xz
+*.zip
