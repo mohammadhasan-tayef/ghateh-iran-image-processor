@@ -91,7 +91,23 @@ Ownership identifies the repository role accountable for maintaining a boundary.
 - **Repository Owner:** Technical lead and developer-experience maintainers, with component owners reviewing component-specific configuration.
 - **Allowed Contents:** Non-secret configuration templates; checked-in tool configuration; schemas; safe defaults; documented example values that are valid to publish.
 - **Forbidden Contents:** Secrets; credentials; generated files; runtime state; user-specific configuration; machine-local paths; active environment files containing private values.
-- **Notes:** Sensitive or deployment-local values remain outside Git. A committed example must contain placeholders or safe development defaults only. Shared repository/workspace configuration belongs under `config/`; deployment-specific manifests, templates, and configuration belong under `deploy/`.
+- **Notes:** Sensitive or deployment-local values remain outside Git. A committed example must contain placeholders or safe development defaults only. Shared repository/workspace configuration normally belongs under `config/`; deployment-specific manifests, templates, and configuration belong under `deploy/`.
+- **Root-Level Convention Exception:** A configuration file may reside at the repository root only when at least one of these conditions applies:
+  1. The tool's standard discovery mechanism requires or conventionally expects the file at the repository root.
+  2. Placing the file under `config/` would prevent repository-wide discovery or correct operation.
+  3. The file governs repository-wide developer or version-control behavior and has a conventional root location.
+
+  This narrow exception does not authorize arbitrary root-level configuration.
+- **Root-Level Requirements:** Every root-level configuration file must:
+  - have a technical discovery or ecosystem-convention justification;
+  - govern repository-wide behavior;
+  - contain no secrets or machine-local values;
+  - not duplicate configuration already owned elsewhere;
+  - not become a miscellaneous alternative to `config/`;
+  - remain minimal and purpose-specific; and
+  - be introduced only in its owning approved Micro Sprint.
+- **Non-Exhaustive Examples:** `.editorconfig`, `.gitattributes`, and `.gitignore` are examples only when their standard repository-wide behavior requires root placement. Listing them documents possible root ownership; it does not create or modify them in this Sprint.
+- **Rationale:** The exception allows standard tool discovery to work and repository-wide behavior to apply from the root while preserving explicit ownership. Its conditions prevent both broken discovery caused by forced relocation and uncontrolled root clutter caused by treating the root as a general configuration directory.
 
 ### `data/`
 
