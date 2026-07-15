@@ -81,9 +81,9 @@ Ownership identifies the repository role accountable for maintaining a boundary.
 
 - **Purpose:** Own deployment-related assets only.
 - **Repository Owner:** Platform and operations maintainers.
-- **Allowed Contents:** Docker definitions, Compose definitions, deployment scripts under `deploy/scripts/`, infrastructure manifests, deployment templates, and operator-facing deployment assets.
+- **Allowed Contents:** Docker definitions; Compose definitions; infrastructure manifests; deployment templates; and deployment scripts under `deploy/scripts/`, including container entrypoints, deployment-time migration execution, deployment health probes, backup and restore execution, operator automation, and install, start, stop, upgrade, and rollback scripts.
 - **Forbidden Contents:** Backend or frontend application code; repository-level lint/format/verify utilities; runtime-generated data; model weights; committed secrets or credentials; user-specific deployment overrides.
-- **Notes:** Any script that installs, starts, stops, upgrades, backs up, restores, or otherwise operates a deployed environment belongs under `deploy/scripts/`, not root `scripts/`.
+- **Notes:** `backend/migrations/` owns Alembic migration definitions; `deploy/scripts/` may own deployment-time invocation of those migrations. Business decisions must never exist only in deployment scripts. Any script that operates a deployed environment belongs under `deploy/scripts/`, not root `scripts/`.
 
 ### `config/`
 
@@ -91,15 +91,15 @@ Ownership identifies the repository role accountable for maintaining a boundary.
 - **Repository Owner:** Technical lead and developer-experience maintainers, with component owners reviewing component-specific configuration.
 - **Allowed Contents:** Non-secret configuration templates; checked-in tool configuration; schemas; safe defaults; documented example values that are valid to publish.
 - **Forbidden Contents:** Secrets; credentials; generated files; runtime state; user-specific configuration; machine-local paths; active environment files containing private values.
-- **Notes:** Sensitive or deployment-local values remain outside Git. A committed example must contain placeholders or safe development defaults only.
+- **Notes:** Sensitive or deployment-local values remain outside Git. A committed example must contain placeholders or safe development defaults only. Shared repository/workspace configuration belongs under `config/`; deployment-specific manifests, templates, and configuration belong under `deploy/`.
 
 ### `data/`
 
 - **Purpose:** Provide a local location for runtime-generated or externally installed data.
 - **Repository Owner:** Operations maintainers own lifecycle policy; producing components own the correctness of their subdirectories.
 - **Allowed Contents:** Caches, installed model data, generated previews, export outputs, temporary files, and other runtime-generated artifacts.
-- **Forbidden Contents:** Application source code; dependency manifests; architecture documentation; reusable developer scripts; secrets or credentials; production data copied into Git.
-- **Notes:** Git ignores `data/` contents except its placeholder. Contents are disposable or governed by runtime retention/backup policy and are never treated as version-controlled source.
+- **Forbidden Contents:** Application source code; dependency manifests; architecture documentation; reusable developer scripts; committed configuration; version-controlled configuration templates; configuration schemas; project defaults; secrets or credentials; production data copied into Git.
+- **Notes:** Git ignores `data/` contents except its placeholder. Contents are disposable or governed by runtime retention/backup policy and are never treated as version-controlled source. Shared committed configuration belongs under `config/`, while deployment-specific configuration belongs under `deploy/`.
 
 ### `docs/`
 
@@ -114,8 +114,8 @@ Ownership identifies the repository role accountable for maintaining a boundary.
 - **Purpose:** Own reusable prompts used during development and planning.
 - **Repository Owner:** Development team, with the technical lead accountable for prompts that define sprint scope.
 - **Allowed Contents:** Version-controlled reusable prompts, sprint prompts, prompt templates, and concise prompt-specific usage notes.
-- **Forbidden Contents:** Generated model responses; application source code; runtime data; secrets, credentials, or private production content; one-off personal scratch prompts.
-- **Notes:** Prompts guide work but do not override accepted architecture documents or ADRs unless an explicit approved change updates those sources.
+- **Forbidden Contents:** Generated model responses; application source code; runtime data; application runtime configuration; runtime business rules; production policy; operational or application sources of truth; secrets, credentials, or private production content; one-off personal scratch prompts.
+- **Notes:** `prompts/` must never be loaded by the application as runtime configuration, must never define runtime business rules, must never be treated as production policy, and must never become an operational or application runtime source of truth. Accepted architecture documents, ADRs, validated configuration, immutable preset revisions, and PostgreSQL records remain authoritative according to their domains.
 
 ### `samples/`
 
