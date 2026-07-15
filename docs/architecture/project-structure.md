@@ -36,6 +36,9 @@ ghateh-iran-image-processor/
 ├── deploy/
 │   ├── compose/
 │   └── scripts/
+├── config/
+├── data/
+├── scripts/
 ├── docs/
 │   ├── architecture/
 │   ├── adr/
