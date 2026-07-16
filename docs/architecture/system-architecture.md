@@ -31,13 +31,15 @@ NVIDIA GPU execution is optional and deferred. Native Windows services are not t
 | Module | Owns | May depend on |
 |---|---|---|
 | Identity/access | Users, fixed roles/permissions, UserSessions | Shared kernel |
-| Storage catalog | Configured root activation, safe keys, source observations/previews, availability | Shared kernel |
+| Storage catalog | Configured root activation, safe keys and locators, source discovery and byte access, current availability, source previews, storage adapters, and technical source evidence | Shared kernel |
 | Ingestion/batches | Scan cursor, Batch/BatchImage registration and review-resolution roll-up | Storage catalog, assets |
-| Assets | ImageAsset and immutable SourceObservation identity | Storage catalog |
+| Assets | ImageAsset; SourceObservation domain meaning; accepted source identity and provenance; historical stability and invariants | Storage catalog |
 | Processing | Runs and candidates; Preset and PresetRevision creation and lifecycle, including immutable revision identity; ProcessingRun preset/SubjectMode/shadow snapshots; engine/model registry | Assets, storage catalog |
 | Review | Immutable decisions and selected candidate | Processing, identity |
 | Export | Independent jobs/items, naming snapshots, production RGB artifacts | Review, storage catalog |
 | Operations | Reconciliation, health, metrics, audit queries | Read-only module ports |
+
+Assets is the sole semantic/domain owner of SourceObservation. Storage catalog has operational responsibility for source discovery, access, current availability, previews, and technical evidence; it may submit evidence for consideration but cannot independently establish accepted SourceObservation meaning. This singular ownership keeps the durable historical fact and its source identity and provenance stable across storage-technology changes, prevents path-driven or filesystem-driven authority, and protects provenance and auditability without making Assets responsible for storage operations.
 
 Processing owns Preset creation and lifecycle and PresetRevision creation and immutability because those versioned processing policies define ProcessingRun meaning; each ProcessingRun references an immutable PresetRevision snapshot; identity/access may authorize management, and UI, API routers, and administration screens may expose that capability, but none owns preset state because authorization and transport do not transfer domain ownership; other modules may reference stable PresetRevisions or snapshots but may not mutate them. Image/Batch state never contains export state. Export reads an approved selected candidate through a Review port, creates its own durable job/item lifecycle, and does not transition BatchImage or Batch.
 
