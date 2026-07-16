@@ -1,6 +1,6 @@
 # Domain Model
 
-This document is authoritative for entity meaning, aggregate boundaries, invariants, relationships, and business transaction boundaries. All entity identifiers are UUIDs and persisted timestamps are UTC.
+This document is authoritative for entity meaning, aggregate boundaries, invariants, relationships, and business transaction boundaries. Its aggregate and relationship descriptions are interpreted under [Core Domain Ownership Rules](core-domain-ownership-rules.md): aggregate grouping, relationship cardinality, persistence relationships, foreign-key direction, and storage location do not independently assign semantic/domain ownership. Explicit module ownership decisions remain authoritative for semantic/domain ownership. All entity identifiers are UUIDs and persisted timestamps are UTC.
 
 ## Identity and Authorization
 
@@ -44,7 +44,7 @@ Preliminary source sameness may use logical key plus size/mtime. Streamed SHA-25
 ## Relationships
 
 - A User has one fixed MVP role and many UserSessions; password reset/privilege change revokes or invalidates all sessions through `session_version`.
-- A StorageRoot is resolved by server `config_key`; it owns many ImageAssets, SourceObservations, Batches, previews, and artifacts.
+- A StorageRoot is resolved by server `config_key` and provides the configured source context for related ImageAssets, SourceObservations, Batches, previews, and artifacts. This relationship and its cardinality do not assign SourceObservation semantic/domain ownership; SourceObservation remains owned by Assets.
 - An ImageAsset has many SourceObservations over time. A BatchImage references exactly one SourceObservation, and an observation may appear in multiple batches.
 - A Batch has many BatchImages, snapshots one immutable preset revision including SubjectMode, and starts with `review_cycle = 1`.
 - A BatchImage owns many ProcessingRuns, CandidateVersions, and ReviewDecisions and selects zero or one CandidateVersion from itself as the effective current selection.
@@ -64,7 +64,9 @@ Owns User and session invalidation version. Username is unique. Role is one appr
 
 ### Storage/source aggregate
 
-StorageRoot references a server-known config key, never a client path. SourceObservation is immutable after hash completion except availability facts. A changed source creates a new observation. Preview artifacts are derived, independently replaceable by generation version, and cannot be treated as originals.
+This existing aggregate description records entity relationships and invariants without assigning SourceObservation to Storage catalog or deciding final aggregate-root status. SourceObservation semantic/domain ownership remains exclusively with Assets, whose authority controls its accepted meaning and invariants; StorageRoot operational or relational participation does not create co-ownership.
+
+StorageRoot references a server-known config key, never a client path. SourceObservation is immutable after hash completion except availability facts. Current availability is an operational fact supplied through Storage catalog responsibilities; it does not redefine accepted SourceObservation identity or provenance and does not transfer semantic/domain ownership. A changed source creates a new observation. Preview artifacts are derived, independently replaceable by generation version, and cannot be treated as originals.
 
 ### Batch aggregate
 
