@@ -24,7 +24,7 @@ Each Internal Pilot installation uses the Windows 11, Docker Desktop, and WSL2 b
 | Maintenance/export worker | Python 3.12 | Scan/hash/preview, reconciliation, and independent exports | Storage plus PostgreSQL |
 | PostgreSQL | 17 | Permanent source of truth, including UserSession | Database volume |
 | Redis | 7.x | Celery broker, short locks, cancellation hints, temporary state | No required business durability |
-| External storage | Server-configured mount | Immutable sources and versioned derived artifacts | Filesystem |
+| Configured host-attached storage | Server-configured mount backed by an internal HDD, internal SSD, or external drive attached to the operator computer | Immutable sources and versioned derived artifacts | Filesystem |
 
 NVIDIA GPU execution is optional and deferred. Native Windows services are not the supported baseline.
 
