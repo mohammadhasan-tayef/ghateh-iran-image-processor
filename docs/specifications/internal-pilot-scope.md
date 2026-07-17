@@ -2,7 +2,9 @@
 
 ## Milestone Definition
 
-The Internal Pilot is a constrained pre-production delivery milestone for one or two named internal Ghateh Iran operators. It is deployed locally on the approved Windows 11, Docker Desktop, WSL2, and Linux-container baseline, is restricted to trusted internal use, and uses the accepted MVP runtime and architectural boundaries.
+The Internal Pilot is a constrained pre-production delivery milestone for participating named internal Ghateh Iran operators. Each operator uses an independent installation on their own Windows computer, including when working from home. Each installation is intended for one named internal user, runs on the approved Windows 11, Docker Desktop, WSL2, and Linux-container baseline, is restricted to trusted internal use, and uses the accepted MVP runtime and architectural boundaries.
+
+Multiple Internal Pilot installations may exist, but they do not share an application server, runtime state, centralized runtime coordination, or cross-installation synchronization. The browser and application entry points are used on the same computer. No office network or VPN is required.
 
 Its purpose is to validate real product-image processing with actual Ghateh Iran datasets through the smallest complete operational feature slice. It is not a separate product, throwaway prototype, alternative architecture, reduced definition of the official MVP, or permission to bypass an accepted ADR. Pilot capability is promoted incrementally into the official MVP rather than replaced.
 
@@ -25,7 +27,7 @@ The Internal Pilot retains:
 - mandatory human review before production export;
 - an ExportJob and ExportItem lifecycle independent from Batch and BatchImage lifecycles;
 - Docker Compose deployment on the approved local baseline;
-- local or external-HDD-backed storage through the approved storage abstractions;
+- internal-HDD-, internal-SSD-, or external-drive-backed storage through the approved storage abstractions;
 - a versioned, deterministic, non-generative image-processing pipeline; and
 - enough auditability to explain every approved export.
 
@@ -33,7 +35,9 @@ The Pilot must not create a second local runner, CLI architecture, desktop-only 
 
 ## Pilot User Scope
 
-The initial operational audience is one or two named internal Ghateh Iran users. Only the minimum accounts needed for real operation may initially be provisioned, but every account uses the accepted identity, authentication, session, and authorization architecture.
+The initial operational audience consists of named internal Ghateh Iran users, each operating an independent installation on their own computer. Each installation is intended for one provisioned named user. User, session, and runtime state remain local to that installation and are not synchronized with another installation.
+
+Every provisioned account uses the accepted identity, authentication, session, and authorization architecture. Standalone-local operation does not permit anonymous access or weaken authentication, authorization, session, review, audit, or durable-state requirements.
 
 The authoritative four-role model remains `admin`, `operator`, `reviewer`, and `auditor`. The Pilot does not remove or redefine a role, invent a new role, or introduce editable permission policy. It may initially expose only the role capabilities and screens required by the selected end-to-end workflow, while the official MVP permission model remains unchanged. Anonymous access is prohibited.
 
@@ -41,7 +45,7 @@ The authoritative four-role model remains `admin`, `operator`, `reviewer`, and `
 
 The minimum complete operational workflow is:
 
-1. An authenticated operator accesses the local React UI.
+1. An authenticated operator accesses the local React UI from a browser on the same computer as the installation.
 2. The operator selects an enabled, server-configured storage root and a safe relative folder.
 3. The system performs bounded image discovery and durable registration.
 4. PostgreSQL records source observations and the intended processing work.
@@ -70,9 +74,10 @@ This workflow defines delivery scope. It does not authorize implementing all cap
 
 The initial Internal Pilot is limited to:
 
-- one configured installation;
-- one or two named internal operators;
-- one enabled local or external-storage workflow;
+- one independent installation per participating operator computer;
+- one named internal user per installation;
+- multiple independent installations with no shared runtime state or cross-installation synchronization;
+- one enabled internal-HDD, internal-SSD, or external-drive storage workflow per installation;
 - bounded folder discovery;
 - one approved processing preset or tightly controlled initial preset;
 - batch registration;
@@ -143,6 +148,8 @@ The Internal Pilot evolves into the official MVP by expanding feature breadth ov
 - review decisions;
 - export records; and
 - architectural dependency direction.
+
+The standalone-local Internal Pilot topology does not prohibit future centralized, shared-processing, remote-access, or other deployment profiles. Any such profile requires a separate reviewed architecture decision and must preserve the accepted product boundaries.
 
 Pilot implementation must not create a migration dependency on:
 

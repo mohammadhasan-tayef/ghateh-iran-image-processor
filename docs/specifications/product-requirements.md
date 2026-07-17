@@ -2,7 +2,9 @@
 
 ## Purpose and Goals
 
-The product is an offline-capable local-network control panel for high-volume product-image processing. It registers images in server-configured external-storage folders without browser upload, preserves originals, produces reviewable non-generative candidates, supports human review, and exports only explicitly approved versions.
+The product is an offline-capable browser-based control panel for high-volume product-image processing. It registers images in server-configured storage folders without browser upload, preserves originals, produces reviewable non-generative candidates, supports human review, and exports only explicitly approved versions.
+
+The initial Internal Pilot deployment profile is standalone-local. Each named operator uses an independent installation on their own Windows computer, and the browser accesses the application only on that same computer. LAN access, an office network, a VPN, a shared application server, centralized processing, shared runtime state, and cross-installation synchronization are not required by the Internal Pilot. Other deployment profiles remain possible only through separate reviewed architecture decisions.
 
 The production e-commerce output is unambiguous: PNG, exactly 2000 × 2000 pixels, 8-bit per channel, sRGB, RGB with no alpha channel, and a pure white `#FFFFFF` canvas. When the optional approved deterministic shadow is enabled, only its mask-derived pixels may differ from white outside the real product. Internal candidate artifacts may use RGBA; masks may use grayscale or alpha PNG.
 
@@ -106,7 +108,7 @@ Small ad-hoc browser upload is a later, secondary workflow and is never the high
 - **Safety:** source content is application-immutable; derived writes use temporary files, checksum verification, and atomic same-volume rename.
 - **Scale:** tens of thousands of images per batch with bounded scan and worker memory.
 - **Durability:** PostgreSQL holds all business/session state; Redis loss cannot lose an accepted decision.
-- **Security:** authenticated LAN use, fixed-role authorization, revocable sessions, CSRF/CORS controls, path containment, and server-configured mounts.
+- **Security:** authenticated access, with loopback/local-host-only browser access for the Internal Pilot; fixed-role authorization, revocable sessions, CSRF/CORS controls, path containment, and server-configured mounts remain required.
 - **Portability:** Windows 11, Docker Desktop, WSL2, and Linux containers are the baseline; CPU is required.
 - **Auditability:** append-only events, immutable candidate artifacts, and preserved export/name snapshots.
 - **Accessibility/localization:** `fa-IR`/RTL first, direction-independent hotkeys, visible focus, Persian font assets later, and no color-only signals.

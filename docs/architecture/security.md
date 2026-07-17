@@ -1,12 +1,12 @@
 # Security
 
-This document is authoritative for the initial threat model, authentication, fixed-role authorization, storage/media controls, and audit requirements. A local network is not a trust boundary.
+This document is authoritative for the initial threat model, authentication, fixed-role authorization, storage/media controls, and audit requirements. Network locality, including loopback-only access, is not an authentication or authorization boundary.
 
 ## Threats and Protected Assets
 
 Protected assets include immutable source photos, approved/exported images, account/session/CSRF secrets, server mount mappings, models, naming/preset snapshots, review decisions, and audit records. Threats include unauthorized access/export, session theft/fixation, CSRF, credential guessing, path/reparse escape, malicious image decode, Unicode/case collisions, model/supply-chain tampering, resource exhaustion, and audit alteration.
 
-Public internet exposure is unsupported. Firewalls limit approved LAN access; PostgreSQL/Redis are not client-accessible.
+Public internet exposure remains unsupported. For the Internal Pilot, browser access to web/API entry points is restricted to loopback/local-host access on the same Windows computer. LAN exposure is unsupported for this profile; PostgreSQL/Redis are not client-accessible. Local-only exposure does not weaken named authentication, PostgreSQL-backed sessions, CSRF protection, fixed-role authorization, path containment, configured-root controls, or secure secret handling. Any future network-accessible profile requires a separate reviewed security and deployment decision.
 
 ## Authentication Decision
 

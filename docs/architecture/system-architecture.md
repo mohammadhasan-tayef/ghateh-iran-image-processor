@@ -6,13 +6,15 @@ This document is authoritative for system boundaries, module dependencies, runti
 
 The initial system is a modular monolith: one versioned Python backend exposes FastAPI REST use cases and Celery task entry points, while a React/TypeScript client consumes the API. PostgreSQL is the permanent business and session authority. Redis holds only queues, locks, cancellation hints, and temporary coordination. Files remain behind a `StorageBackend` addressed by configured root plus logical key.
 
-The local network is not trusted. Users authenticate through named local accounts and PostgreSQL-backed server sessions. The primary UI is `fa-IR`/RTL; the API retains stable English technical codes and UTC timestamps. Only server/Docker configuration maps storage `config_key` values to container paths; administrators activate/label those existing keys and never submit host paths.
+For the Internal Pilot, each operator runs an independent installation on their own Windows computer. The browser consumes the web and API entry points on that same host through loopback/local-host-only exposure. No office network, LAN browser access, VPN, shared application server, shared runtime state, or cross-installation synchronization is required.
+
+Standalone-local access is not an authentication or authorization boundary. Users still authenticate through named local accounts and PostgreSQL-backed server sessions. The primary UI is `fa-IR`/RTL; the API retains stable English technical codes and UTC timestamps. Only server/Docker configuration maps storage `config_key` values to container paths; administrators activate/label those existing keys and never submit host paths. Any future network-accessible deployment profile must continue to treat the network as untrusted and requires a separate reviewed decision.
 
 See [system context](../diagrams/system-context.md) and [container architecture](../diagrams/container-architecture.md).
 
 ## Baseline Runtime
 
-The baseline is Windows 11 with Docker Desktop and WSL2, using Linux containers. Exact patch/image versions are pinned during Sprint 1 after official-image and compatibility verification.
+Each Internal Pilot installation uses the Windows 11, Docker Desktop, and WSL2 baseline with Linux containers. Exact patch/image versions are pinned during Sprint 1 after official-image and compatibility verification.
 
 | Container/process | Direction/version baseline | Responsibility | Durable state |
 |---|---|---|---|
@@ -22,7 +24,7 @@ The baseline is Windows 11 with Docker Desktop and WSL2, using Linux containers.
 | Maintenance/export worker | Python 3.12 | Scan/hash/preview, reconciliation, and independent exports | Storage plus PostgreSQL |
 | PostgreSQL | 17 | Permanent source of truth, including UserSession | Database volume |
 | Redis | 7.x | Celery broker, short locks, cancellation hints, temporary state | No required business durability |
-| External storage | Server-configured mount | Immutable sources and versioned derived artifacts | Filesystem |
+| Configured host-attached storage | Server-configured mount backed by an internal HDD, internal SSD, or external drive attached to the operator computer | Immutable sources and versioned derived artifacts | Filesystem |
 
 NVIDIA GPU execution is optional and deferred. Native Windows services are not the supported baseline.
 
