@@ -16,7 +16,9 @@ This document is authoritative for the supported developer/local topology, serve
 
 Sprint 1 must select and pin exact patch versions, base-image digests/tags, Python/Node packages, and compatible PostgreSQL/Redis images using then-current official images and compatibility tests. Sprint 0.1 does not invent patch versions or install dependencies.
 
-The initial topology is one web, one API, one PostgreSQL volume, one bounded Redis, one CPU image worker, one scan/maintenance/export worker, and one configured external drive. API/web bind only to approved LAN interfaces/firewall scope; PostgreSQL/Redis remain internal. Native Windows services are not the supported baseline because they expand Celery/PyTorch test risk.
+The Internal Pilot instantiates this topology independently on each participating operator's Windows computer: one web, one API, one PostgreSQL volume, one bounded Redis, one CPU image worker, one scan/maintenance/export worker, and configured storage attached to that computer. Storage may be an internal HDD, internal SSD, or external drive exposed through the approved configured-root abstraction.
+
+Internal Pilot API/web entry points bind only to loopback/local-host access on the same computer; PostgreSQL/Redis remain internal. No office network, LAN browser access, VPN, shared application server, shared runtime state, centralized processing service, or cross-installation synchronization is required. This constraint selects no exact port, packaging, installer behavior, or local transport implementation. Native Windows services are not the supported baseline because they expand Celery/PyTorch test risk.
 
 ## Server-Configured Storage Mounts
 
@@ -50,7 +52,7 @@ The later NVIDIA profile requires compatible hardware/driver, WSL2/container GPU
 
 Environment configuration includes database/Redis URLs, allowed origins, session/CSRF secrets, idle/absolute timeouts, TLS/cookie settings, root config keys/mounts, volume identities, retention, limits, model refs, and primary `fa-IR` locale/timezone defaults. Secrets remain outside Git.
 
-Production session cookies require TLS and `Secure`; LAN certificate management is a deployment prerequisite. The frontend ships a suitable Persian font through normal versioned assets in an implementation sprint; no host font assumption and no Sprint 0.1 binary asset. Backend/database time is UTC; client display uses configured timezone.
+Production session cookies require TLS and `Secure`. This topology alignment creates no TLS, certificate, or cookie exception for standalone-local operation. Certificate handling for any future network-accessible deployment profile remains a deployment prerequisite subject to separate review. The frontend ships a suitable Persian font through normal versioned assets in an implementation sprint; no host font assumption and no Sprint 0.1 binary asset. Backend/database time is UTC; client display uses configured timezone.
 
 ## Backup and Restore
 

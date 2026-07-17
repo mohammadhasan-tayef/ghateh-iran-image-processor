@@ -4,16 +4,18 @@ Derived from [system architecture](../architecture/system-architecture.md).
 
 ```mermaid
 flowchart LR
-    Operator[Operator / Reviewer]
-    Admin[Administrator]
-    System[Ghateh Iran Image Processor]
-    Drive[(Approved external drive)]
-    Models[(Verified local model files)]
+    subgraph Host[Operator's Windows computer]
+        User[Named internal user]
+        Browser[Local browser]
+        System[Local Ghateh Iran Image Processor installation]
+        Storage[(Attached internal HDD, SSD, or external drive)]
+        Models[(Verified local model files)]
 
-    Operator -->|LAN browser: batches, review, export| System
-    Admin -->|Users, roots, models, policy| System
-    System -->|Read immutable originals; write versioned outputs| Drive
-    System -->|Load by verified checksum| Models
+        User -->|Uses| Browser
+        Browser -->|Loopback / local-host only| System
+        System -->|Read immutable originals; write versioned outputs| Storage
+        System -->|Load by verified checksum| Models
+    end
 
     note[No paid API or cloud image-processing dependency]
     note -. constraint .-> System
