@@ -73,5 +73,8 @@ addopts = ["-ra", "-q"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+  "postgresql_integration: requires an explicitly approved disposable PostgreSQL service",
+]
 strict_config = true
 strict_markers = true
