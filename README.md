@@ -4,7 +4,7 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.9.4 — Real PostgreSQL Migration Cycle Integration Gate completed.
+Sprint 1.9.5 — PostgreSQL Runtime Engine Ownership Boundary completed.
 
 The backend now includes exactly pinned SQLAlchemy and psycopg binary runtime dependencies and an immutable, secret-safe database configuration boundary. The only supported database URL environment variable is `GHATEH_DATABASE_URL`, and its URL must use the `postgresql+psycopg` driver with explicit credentials, host, port, and database name. This variable is required when database tooling or runtime composition begins.
 
@@ -36,7 +36,9 @@ uv run pytest -m postgresql_integration tests/integration/test_postgresql_migrat
 
 The target must be an explicitly approved disposable loopback database named `ghateh_processor_ci` with user `ghateh_ci`; the test refuses non-loopback targets and any other database or user. The normal test suite does not opt in and does not connect to PostgreSQL.
 
-The current `ghateh-api` runner still does not construct or connect to a runtime database engine. No application table exists yet.
+The application runtime engine ownership boundary now consists of `DatabaseRuntime` and `create_database_runtime(settings)`. The factory consumes the existing centralized `resolve_database_url()` boundary and lazily constructs one synchronous SQLAlchemy Engine without connecting to PostgreSQL. Each executable process must create and dispose its own process-local `DatabaseRuntime` through its composition root; no global runtime Engine exists, and an Engine must not be created before process forking and reused across processes.
+
+The runtime Engine uses `QueuePool`, enables connection pre-ping, disables SQL echo, and hides bound statement parameters. Alembic retains its separate migration-only `NullPool` Engine. The current `ghateh-api` runner and FastAPI lifespan do not create or own a runtime Engine yet, and workers do not create one. No connectivity probe or readiness endpoint exists. No Session, repository, Unit of Work, ORM metadata, or business table exists yet.
 
 The backend creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
 
@@ -52,7 +54,7 @@ The API defaults to `127.0.0.1:8000`. Process-environment overrides are limited 
 
 No `.env` loading exists, and no database URL or password is configured in the repository.
 
-No persistent local PostgreSQL runtime or Docker Compose configuration exists yet. The API still has no runtime database engine, session, repository, or Unit of Work.
+No persistent local PostgreSQL runtime or Docker Compose configuration exists yet. The API still does not construct or connect through the runtime Engine boundary.
 
 No operational image-processing workflow has been implemented yet.
 
@@ -111,4 +113,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is the PostgreSQL runtime-engine construction and connectivity boundary.
+The next implementation increment is Runtime PostgreSQL Connectivity Probe.
