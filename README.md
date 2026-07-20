@@ -4,9 +4,19 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.8.4 — Automated Backend Quality Gate completed.
+Sprint 1.9.1 — PostgreSQL Dependencies and Typed Database Configuration completed.
 
-The backend now creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
+The backend now includes exactly pinned SQLAlchemy and psycopg binary runtime dependencies and an immutable, secret-safe database configuration boundary. The only supported database URL environment variable is `GHATEH_DATABASE_URL`, and its URL must use the `postgresql+psycopg` driver with explicit credentials, host, port, and database name. This variable is required when database tooling or runtime composition begins.
+
+The database URL has no committed default, and `.env` loading remains disabled. The following value is a structural placeholder, not an active credential:
+
+```text
+postgresql+psycopg://<user>:<password>@<host>:5432/<database>
+```
+
+The current `ghateh-api` runner does not construct or connect to a database engine. No migration or table exists yet.
+
+The backend creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
 
 Every Pull Request and every push to `main` runs the backend quality gate. On the pinned Ubuntu 24.04, Python 3.12.13, and uv 0.11.29 environment, CI verifies lockfile consistency, locked environment synchronization, Ruff formatting, Ruff lint, strict mypy, pytest, and package construction. This gate validates only the platform-neutral backend foundation; it does not deploy or publish anything.
 
@@ -18,11 +28,11 @@ uv run ghateh-api
 
 The API defaults to `127.0.0.1:8000`. Process-environment overrides are limited to `GHATEH_API_HOST` and `GHATEH_API_PORT`; non-loopback addresses are rejected. Port `8000` is a local executable default, not a permanent deployment contract.
 
-No `.env` loading exists yet, and no secrets are configured yet.
+No `.env` loading exists, and no database URL or password is configured in the repository.
 
 No operational image-processing workflow has been implemented yet.
 
-Persistence, authentication, storage, queues, and processing capabilities have not been implemented.
+Authentication, storage, queues, and processing capabilities have not been implemented.
 
 ## Sprint 0 Scope
 
@@ -77,4 +87,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is the PostgreSQL runtime and migration harness foundation.
+The next implementation increment is the Alembic migration harness and empty baseline migration.
