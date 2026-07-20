@@ -4,9 +4,11 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.8.3 — Typed Local API Runtime Configuration and Server Runner completed.
+Sprint 1.8.4 — Automated Backend Quality Gate completed.
 
 The backend now creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
+
+Every Pull Request and every push to `main` runs the backend quality gate. On the pinned Ubuntu 24.04, Python 3.12.13, and uv 0.11.29 environment, CI verifies lockfile consistency, locked environment synchronization, Ruff formatting, Ruff lint, strict mypy, pytest, and package construction. This gate validates only the platform-neutral backend foundation; it does not deploy or publish anything.
 
 From `backend/`, the normal local development startup command is:
 
@@ -75,4 +77,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is automated backend quality checks in CI.
+The next implementation increment is the PostgreSQL runtime and migration harness foundation.
