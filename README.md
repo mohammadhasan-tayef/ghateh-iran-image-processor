@@ -4,9 +4,11 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.9.1 — PostgreSQL Dependencies and Typed Database Configuration completed.
+Sprint 1.9.2 — Database URL Consumption Boundary and Query Hardening completed.
 
 The backend now includes exactly pinned SQLAlchemy and psycopg binary runtime dependencies and an immutable, secret-safe database configuration boundary. The only supported database URL environment variable is `GHATEH_DATABASE_URL`, and its URL must use the `postgresql+psycopg` driver with explicit credentials, host, port, and database name. This variable is required when database tooling or runtime composition begins.
+
+All trusted database consumers must use the centralized `resolve_database_url()` boundary to obtain a normally redacted SQLAlchemy URL. Database URL query parameters are currently rejected so unreviewed connection, credential, host, port, and TLS behavior cannot enter migration or runtime composition.
 
 The database URL has no committed default, and `.env` loading remains disabled. The following value is a structural placeholder, not an active credential:
 
@@ -14,7 +16,7 @@ The database URL has no committed default, and `.env` loading remains disabled. 
 postgresql+psycopg://<user>:<password>@<host>:5432/<database>
 ```
 
-The current `ghateh-api` runner does not construct or connect to a database engine. No migration or table exists yet.
+The current `ghateh-api` runner does not construct or connect to a database engine. No Alembic environment, migration, or table exists yet.
 
 The backend creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
 
@@ -87,4 +89,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is the Alembic migration harness and empty baseline migration.
+The next implementation increment remains the Alembic Migration Harness and Empty Baseline Migration.
