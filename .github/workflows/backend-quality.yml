@@ -69,3 +69,79 @@ jobs:
 
       - name: Verify tracked-file integrity
         run: git diff --exit-code
+
+  postgresql-migration-cycle:
+    name: postgresql-migration-cycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:17.10-bookworm@sha256:4f736ae292687621d4dbe0d499ffd024a36bd2ee7d8ca6f2ccd4c800f047b394
+        env:
+          POSTGRES_USER: ghateh_ci
+          POSTGRES_PASSWORD: ghateh_ci_test_password
+          POSTGRES_DB: ghateh_processor_ci
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U ghateh_ci -d ghateh_processor_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          checksum: "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
+          enable-cache: false
+
+      - name: Display tool and PostgreSQL versions
+        env:
+          PGPASSWORD: ghateh_ci_test_password
+          PGPORT: ${{ job.services.postgres.ports[5432] }}
+        run: |
+          python --version
+          uv --version
+          psql --host=127.0.0.1 --username=ghateh_ci --dbname=ghateh_processor_ci \
+            --tuples-only --no-align --command="SHOW server_version;"
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Synchronize locked environment
+        run: uv sync --locked --all-groups
+
+      - name: Run PostgreSQL migration cycle
+        shell: bash
+        env:
+          GHATEH_RUN_POSTGRESQL_INTEGRATION: "1"
+          GHATEH_DATABASE_URL: postgresql+psycopg://ghateh_ci:ghateh_ci_test_password@127.0.0.1:${{ job.services.postgres.ports[5432] }}/ghateh_processor_ci
+        run: |
+          set -o pipefail
+
+          uv run pytest -m postgresql_integration \
+            tests/integration/test_postgresql_migration_cycle.py -rs \
+            | tee "$RUNNER_TEMP/postgresql-migration-cycle.log"
+
+          if grep -Eq '(^|[[:space:]])[1-9][0-9]* skipped' \
+            "$RUNNER_TEMP/postgresql-migration-cycle.log"; then
+            echo "PostgreSQL integration test was unexpectedly skipped." >&2
+            exit 1
+          fi

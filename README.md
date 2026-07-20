@@ -4,7 +4,7 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.9.3 — Alembic Migration Harness and Empty Baseline Revision completed.
+Sprint 1.9.4 — Real PostgreSQL Migration Cycle Integration Gate completed.
 
 The backend now includes exactly pinned SQLAlchemy and psycopg binary runtime dependencies and an immutable, secret-safe database configuration boundary. The only supported database URL environment variable is `GHATEH_DATABASE_URL`, and its URL must use the `postgresql+psycopg` driver with explicit credentials, host, port, and database name. This variable is required when database tooling or runtime composition begins.
 
@@ -26,13 +26,21 @@ uv run alembic -c alembic.ini history
 uv run alembic -c alembic.ini upgrade head --sql
 ```
 
-`GHATEH_DATABASE_URL` must be set before commands that execute the migration environment, including offline SQL generation and future online migration execution. Offline PostgreSQL SQL generation is supported. Online migration execution is scaffolded but has not been validated against a real PostgreSQL service. Autogenerate is not enabled because no ORM metadata exists.
+`GHATEH_DATABASE_URL` must be set before commands that execute the migration environment, including offline SQL generation and online migration execution. Offline PostgreSQL SQL generation is supported. The online migration path is verified in CI against a disposable PostgreSQL 17.10 service through the complete fresh database → upgrade to head → downgrade to base → upgrade to head cycle. Both upgrades verify the active revision as `0001_empty_baseline`, and the cycle verifies that no business table is created. Autogenerate is not enabled because no ORM metadata exists.
+
+The disposable CI service is integration-test infrastructure, not application deployment infrastructure. To run the dedicated test from `backend/`, configure both `GHATEH_RUN_POSTGRESQL_INTEGRATION=1` and `GHATEH_DATABASE_URL`, then run:
+
+```text
+uv run pytest -m postgresql_integration tests/integration/test_postgresql_migration_cycle.py
+```
+
+The target must be an explicitly approved disposable loopback database named `ghateh_processor_ci` with user `ghateh_ci`; the test refuses non-loopback targets and any other database or user. The normal test suite does not opt in and does not connect to PostgreSQL.
 
 The current `ghateh-api` runner still does not construct or connect to a runtime database engine. No application table exists yet.
 
 The backend creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
 
-Every Pull Request and every push to `main` runs the backend quality gate. On the pinned Ubuntu 24.04, Python 3.12.13, and uv 0.11.29 environment, CI verifies lockfile consistency, locked environment synchronization, Ruff formatting, Ruff lint, strict mypy, pytest, and package construction. This gate validates only the platform-neutral backend foundation; it does not deploy or publish anything.
+Every Pull Request and every push to `main` runs the backend quality gate. On the pinned Ubuntu 24.04, Python 3.12.13, and uv 0.11.29 environment, CI verifies lockfile consistency, locked environment synchronization, Ruff formatting, Ruff lint, strict mypy, pytest, and package construction. An independent job verifies the real PostgreSQL migration cycle against its disposable service. These gates validate only the backend foundation; they do not deploy or publish anything.
 
 From `backend/`, the normal local development startup command is:
 
@@ -43,6 +51,8 @@ uv run ghateh-api
 The API defaults to `127.0.0.1:8000`. Process-environment overrides are limited to `GHATEH_API_HOST` and `GHATEH_API_PORT`; non-loopback addresses are rejected. Port `8000` is a local executable default, not a permanent deployment contract.
 
 No `.env` loading exists, and no database URL or password is configured in the repository.
+
+No persistent local PostgreSQL runtime or Docker Compose configuration exists yet. The API still has no runtime database engine, session, repository, or Unit of Work.
 
 No operational image-processing workflow has been implemented yet.
 
@@ -101,4 +111,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is real PostgreSQL-backed migration apply and downgrade verification.
+The next implementation increment is the PostgreSQL runtime-engine construction and connectivity boundary.
