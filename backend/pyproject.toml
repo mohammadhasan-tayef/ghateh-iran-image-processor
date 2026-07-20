@@ -8,6 +8,7 @@ version = "0.1.0.dev0"
 description = "Backend workspace for the Ghateh Iran Image Processor."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "alembic==1.18.5",
   "fastapi==0.139.2",
   "pydantic==2.13.4",
   "pydantic-settings==2.14.2",
