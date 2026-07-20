@@ -1,0 +1,71 @@
+name: Backend Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-quality:
+    name: backend-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          checksum: "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
+          enable-cache: false
+
+      - name: Display tool versions
+        run: |
+          python --version
+          uv --version
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Synchronize locked environment
+        run: uv sync --locked --all-groups
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Check lint
+        run: uv run ruff check .
+
+      - name: Check types
+        run: uv run mypy src tests
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Build package
+        run: uv build
+
+      - name: Verify tracked-file integrity
+        run: git diff --exit-code
