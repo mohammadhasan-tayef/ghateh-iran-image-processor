@@ -10,8 +10,12 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi==0.139.2",
   "pydantic==2.13.4",
+  "pydantic-settings==2.14.2",
   "uvicorn==0.51.0",
 ]
+
+[project.scripts]
+ghateh-api = "ghateh_processor.bootstrap.server:main"
 
 [dependency-groups]
 dev = [

@@ -4,19 +4,23 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.8.2 — FastAPI Application Factory and Liveness Contract completed.
+Sprint 1.8.3 — Typed Local API Runtime Configuration and Server Runner completed.
 
-The backend now creates the API through an explicit FastAPI application factory. Its local liveness route is available at `GET /api/v1/health/live`.
+The backend now creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
 
-From `backend/`, start the development server on loopback with:
+From `backend/`, the normal local development startup command is:
 
 ```text
-uv run uvicorn ghateh_processor.bootstrap.api:create_app --factory --host 127.0.0.1
+uv run ghateh-api
 ```
+
+The API defaults to `127.0.0.1:8000`. Process-environment overrides are limited to `GHATEH_API_HOST` and `GHATEH_API_PORT`; non-loopback addresses are rejected. Port `8000` is a local executable default, not a permanent deployment contract.
+
+No `.env` loading exists yet, and no secrets are configured yet.
 
 No operational image-processing workflow has been implemented yet.
 
-Persistence, authentication, storage, queue, and processing capabilities have not been implemented.
+Persistence, authentication, storage, queues, and processing capabilities have not been implemented.
 
 ## Sprint 0 Scope
 
@@ -71,4 +75,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is typed local application configuration.
+The next implementation increment is automated backend quality checks in CI.
