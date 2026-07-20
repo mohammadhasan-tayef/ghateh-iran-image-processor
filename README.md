@@ -4,7 +4,7 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.9.5 — PostgreSQL Runtime Engine Ownership Boundary completed.
+Sprint 1.9.6 — Runtime PostgreSQL Connectivity Probe completed.
 
 The backend now includes exactly pinned SQLAlchemy and psycopg binary runtime dependencies and an immutable, secret-safe database configuration boundary. The only supported database URL environment variable is `GHATEH_DATABASE_URL`, and its URL must use the `postgresql+psycopg` driver with explicit credentials, host, port, and database name. This variable is required when database tooling or runtime composition begins.
 
@@ -28,21 +28,24 @@ uv run alembic -c alembic.ini upgrade head --sql
 
 `GHATEH_DATABASE_URL` must be set before commands that execute the migration environment, including offline SQL generation and online migration execution. Offline PostgreSQL SQL generation is supported. The online migration path is verified in CI against a disposable PostgreSQL 17.10 service through the complete fresh database → upgrade to head → downgrade to base → upgrade to head cycle. Both upgrades verify the active revision as `0001_empty_baseline`, and the cycle verifies that no business table is created. Autogenerate is not enabled because no ORM metadata exists.
 
-The disposable CI service is integration-test infrastructure, not application deployment infrastructure. To run the dedicated test from `backend/`, configure both `GHATEH_RUN_POSTGRESQL_INTEGRATION=1` and `GHATEH_DATABASE_URL`, then run:
+The disposable CI service is integration-test infrastructure, not application deployment infrastructure. To run either dedicated test from `backend/`, configure both `GHATEH_RUN_POSTGRESQL_INTEGRATION=1` and `GHATEH_DATABASE_URL`, then run the required test explicitly:
 
 ```text
+uv run pytest -m postgresql_integration tests/integration/test_postgresql_runtime_connectivity.py
 uv run pytest -m postgresql_integration tests/integration/test_postgresql_migration_cycle.py
 ```
 
-The target must be an explicitly approved disposable loopback database named `ghateh_processor_ci` with user `ghateh_ci`; the test refuses non-loopback targets and any other database or user. The normal test suite does not opt in and does not connect to PostgreSQL.
+The target must be an explicitly approved disposable loopback database named `ghateh_processor_ci` with user `ghateh_ci`; both tests refuse non-loopback targets and any other database or user. The normal test suite does not opt in and does not connect to PostgreSQL.
 
 The application runtime engine ownership boundary now consists of `DatabaseRuntime` and `create_database_runtime(settings)`. The factory consumes the existing centralized `resolve_database_url()` boundary and lazily constructs one synchronous SQLAlchemy Engine without connecting to PostgreSQL. Each executable process must create and dispose its own process-local `DatabaseRuntime` through its composition root; no global runtime Engine exists, and an Engine must not be created before process forking and reused across processes.
 
-The runtime Engine uses `QueuePool`, enables connection pre-ping, disables SQL echo, and hides bound statement parameters. Alembic retains its separate migration-only `NullPool` Engine. The current `ghateh-api` runner and FastAPI lifespan do not create or own a runtime Engine yet, and workers do not create one. No connectivity probe or readiness endpoint exists. No Session, repository, Unit of Work, ORM metadata, or business table exists yet.
+The runtime Engine uses `QueuePool`, enables connection pre-ping, disables SQL echo, and hides bound statement parameters. Alembic retains its separate migration-only `NullPool` Engine. The `probe_database_connectivity(runtime)` boundary consumes an active `DatabaseRuntime`, borrows one Connection from its existing Engine, executes exactly `SELECT 1`, and requires the scalar result to be integer `1`. The Connection closes when its context exits; the probe does not dispose or replace the Runtime, and a successful probe leaves the same Runtime Engine active. SQLAlchemy connectivity failures propagate to the caller without retry, backoff, or a new timeout policy.
+
+The disposable PostgreSQL CI service runs the Runtime connectivity test before the existing migration-cycle test. The later fresh-database assertion proves that the probe creates no schema, migration revision, or business state. The current `ghateh-api` runner and FastAPI lifespan still do not create or own `DatabaseRuntime`, workers do not create one, and application-startup database policy remains undefined. No readiness endpoint, Session, repository, Unit of Work, ORM metadata, business migration, or business table exists yet.
 
 The backend creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
 
-Every Pull Request and every push to `main` runs the backend quality gate. On the pinned Ubuntu 24.04, Python 3.12.13, and uv 0.11.29 environment, CI verifies lockfile consistency, locked environment synchronization, Ruff formatting, Ruff lint, strict mypy, pytest, and package construction. An independent job verifies the real PostgreSQL migration cycle against its disposable service. These gates validate only the backend foundation; they do not deploy or publish anything.
+Every Pull Request and every push to `main` runs the backend quality gate. On the pinned Ubuntu 24.04, Python 3.12.13, and uv 0.11.29 environment, CI verifies lockfile consistency, locked environment synchronization, Ruff formatting, Ruff lint, strict mypy, pytest, and package construction. An independent job verifies the Runtime connectivity probe and then the real PostgreSQL migration cycle against the same disposable PostgreSQL 17.10 service. These gates validate only the backend foundation; they do not deploy or publish anything.
 
 From `backend/`, the normal local development startup command is:
 
@@ -54,7 +57,7 @@ The API defaults to `127.0.0.1:8000`. Process-environment overrides are limited 
 
 No `.env` loading exists, and no database URL or password is configured in the repository.
 
-No persistent local PostgreSQL runtime or Docker Compose configuration exists yet. The API still does not construct or connect through the runtime Engine boundary.
+No persistent local PostgreSQL Runtime or Docker Compose configuration exists yet. The API still does not construct, own, or probe through the runtime Engine boundary.
 
 No operational image-processing workflow has been implemented yet.
 
@@ -113,4 +116,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is Runtime PostgreSQL Connectivity Probe.
+The next implementation increment is FastAPI Lifespan Database Ownership.
