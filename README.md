@@ -4,11 +4,19 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.8.1 — Backend Python Workspace Foundation completed.
+Sprint 1.8.2 — FastAPI Application Factory and Liveness Contract completed.
 
-The typed, testable Python 3.12 backend workspace and locked developer quality toolchain now exist.
+The backend now creates the API through an explicit FastAPI application factory. Its local liveness route is available at `GET /api/v1/health/live`.
+
+From `backend/`, start the development server on loopback with:
+
+```text
+uv run uvicorn ghateh_processor.bootstrap.api:create_app --factory --host 127.0.0.1
+```
 
 No operational image-processing workflow has been implemented yet.
+
+Persistence, authentication, storage, queue, and processing capabilities have not been implemented.
 
 ## Sprint 0 Scope
 
@@ -63,4 +71,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is the FastAPI executable walking skeleton.
+The next implementation increment is typed local application configuration.
