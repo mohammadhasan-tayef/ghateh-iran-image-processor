@@ -1,12 +1,14 @@
 # Ghateh Iran Image Processor
 
-Ghateh Iran Image Processor is a self-hosted, local-network system for registering and processing large product-image batches directly from approved external-storage folders. It preserves source photographs, creates reviewable non-generative candidates, and exports only versions accepted under the configured human-review policy.
+Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses independent standalone-local installations. The browser and application run on the same operator computer, with configured local or externally attached storage. It preserves source photographs, creates reviewable non-generative candidates, and exports only versions accepted under the configured human-review policy.
 
 ## Current Status
 
-Sprint 1.1 — Project Skeleton completed.
+Sprint 1.8.1 — Backend Python Workspace Foundation completed.
 
-No executable application code has been implemented yet.
+The typed, testable Python 3.12 backend workspace and locked developer quality toolchain now exist.
+
+No operational image-processing workflow has been implemented yet.
 
 ## Sprint 0 Scope
 
@@ -49,7 +51,7 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Repository Structure
 
-- `backend/` — backend workspace placeholder
+- `backend/` — Python backend workspace and package foundation
 - `frontend/` — frontend workspace placeholder
 - `deploy/` — deployment workspace placeholder
 - `config/` — repository configuration placeholder
@@ -61,4 +63,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-After this repository-structure alignment patch is merged, the next step is Sprint 1.2.
+The next implementation increment is the FastAPI executable walking skeleton.

@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ghateh-iran-image-processor"
+version = "0.1.0.dev0"
+description = "Backend workspace for the Ghateh Iran Image Processor."
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "mypy==2.3.0",
+  "pytest==9.1.1",
+  "ruff==0.15.22",
+]
+
+[tool.uv]
+required-version = "==0.11.29"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ghateh_processor"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+force-exclude = true
+extend-exclude = [
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".venv",
+  "build",
+  "dist",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.format]
+indent-style = "space"
+line-ending = "lf"
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+strict = true
+no_implicit_optional = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+show_error_codes = true
+
+[tool.pytest]
+minversion = "9.1"
+addopts = ["-ra", "-q"]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+strict_config = true
+strict_markers = true
