@@ -7,10 +7,15 @@ name = "ghateh-iran-image-processor"
 version = "0.1.0.dev0"
 description = "Backend workspace for the Ghateh Iran Image Processor."
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+  "fastapi==0.139.2",
+  "pydantic==2.13.4",
+  "uvicorn==0.51.0",
+]
 
 [dependency-groups]
 dev = [
+  "httpx==0.28.1",
   "mypy==2.3.0",
   "pytest==9.1.1",
   "ruff==0.15.22",
