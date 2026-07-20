@@ -2,10 +2,12 @@
 
 import pytest
 from pydantic import SecretStr, ValidationError
+from sqlalchemy.engine import URL
 
 from ghateh_processor.bootstrap.database_settings import (
     DatabaseSettings,
     load_database_settings,
+    resolve_database_url,
 )
 
 DATABASE_URL_ENVIRONMENT_VARIABLE = "GHATEH_DATABASE_URL"
@@ -71,6 +73,40 @@ def test_database_settings_are_immutable(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(ValidationError):
         setattr(settings, "database_url", SecretStr("replacement"))
+
+
+def test_resolver_preserves_validated_database_url_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _load_from_environment(
+        monkeypatch,
+        "postgresql+psycopg://app_user:fake%40password%3Avalue@postgres:6543/"
+        "ghateh_processor",
+    )
+
+    resolved_url = resolve_database_url(settings)
+
+    assert isinstance(resolved_url, URL)
+    assert resolved_url.drivername == "postgresql+psycopg"
+    assert resolved_url.username == "app_user"
+    assert resolved_url.password == "fake@password:value"
+    assert resolved_url.host == "postgres"
+    assert resolved_url.port == 6543
+    assert resolved_url.database == "ghateh_processor"
+
+
+def test_resolver_returns_independent_values_without_mutating_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _load_from_environment(monkeypatch, VALID_DATABASE_URL)
+    original_serialization = settings.model_dump()
+
+    first = resolve_database_url(settings)
+    second = resolve_database_url(settings)
+
+    assert first == second
+    assert first is not second
+    assert settings.model_dump() == original_serialization
 
 
 @pytest.mark.parametrize(
@@ -184,6 +220,34 @@ def test_incomplete_or_malformed_database_urls_are_rejected(
         _load_from_environment(monkeypatch, database_url)
 
 
+@pytest.mark.parametrize(
+    "query_string",
+    [
+        pytest.param("sslmode=require", id="sslmode"),
+        pytest.param("host=other-host", id="alternate-host"),
+        pytest.param("port=5433", id="alternate-port"),
+        pytest.param("user=other-user", id="alternate-user"),
+        pytest.param("password=other-password", id="alternate-password"),
+        pytest.param("dbname=other-database", id="alternate-database"),
+        pytest.param("application_name=ghateh", id="application-name"),
+        pytest.param("unapproved=value", id="unknown-parameter"),
+        pytest.param(
+            "sslmode=require&application_name=ghateh",
+            id="multiple-parameters",
+        ),
+    ],
+)
+def test_database_url_query_parameters_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    query_string: str,
+) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="database URL query parameters are not supported",
+    ):
+        _load_from_environment(monkeypatch, f"{VALID_DATABASE_URL}?{query_string}")
+
+
 def test_database_credentials_are_redacted_from_normal_display(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -192,11 +256,14 @@ def test_database_credentials_are_redacted_from_normal_display(
         monkeypatch,
         f"postgresql+psycopg://app_user:{fake_password}@postgres:5432/ghateh_processor",
     )
+    resolved_url = resolve_database_url(settings)
 
     assert fake_password not in repr(settings)
     assert fake_password not in str(settings.database_url)
     assert fake_password not in repr(settings.model_dump())
     assert fake_password not in settings.model_dump_json()
+    assert fake_password not in str(resolved_url)
+    assert fake_password not in repr(resolved_url)
 
 
 def test_invalid_database_url_errors_redact_credentials(
@@ -212,3 +279,22 @@ def test_invalid_database_url_errors_redact_credentials(
         _load_from_environment(monkeypatch, invalid_url)
 
     assert fake_password not in str(error.value)
+
+
+def test_query_validation_errors_redact_credentials_and_query_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_password = "clearly_fake_query_password"
+    fake_query_value = "clearly_fake_query_value"
+    invalid_url = (
+        f"postgresql+psycopg://app_user:{fake_password}@postgres:5432/"
+        f"ghateh_processor?password={fake_query_value}"
+    )
+
+    with pytest.raises(ValidationError) as error:
+        _load_from_environment(monkeypatch, invalid_url)
+
+    error_text = str(error.value)
+    assert "database URL query parameters are not supported" in error_text
+    assert fake_password not in error_text
+    assert fake_query_value not in error_text
