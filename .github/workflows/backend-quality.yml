@@ -128,6 +128,24 @@ jobs:
       - name: Synchronize locked environment
         run: uv sync --locked --all-groups
 
+      - name: Run runtime PostgreSQL connectivity probe
+        shell: bash
+        env:
+          GHATEH_RUN_POSTGRESQL_INTEGRATION: "1"
+          GHATEH_DATABASE_URL: postgresql+psycopg://ghateh_ci:ghateh_ci_test_password@127.0.0.1:${{ job.services.postgres.ports[5432] }}/ghateh_processor_ci
+        run: |
+          set -o pipefail
+
+          uv run pytest -m postgresql_integration \
+            tests/integration/test_postgresql_runtime_connectivity.py -rs \
+            | tee "$RUNNER_TEMP/postgresql-runtime-connectivity.log"
+
+          if grep -Eq '(^|[[:space:]])[1-9][0-9]* skipped' \
+            "$RUNNER_TEMP/postgresql-runtime-connectivity.log"; then
+            echo "Runtime PostgreSQL connectivity test was unexpectedly skipped." >&2
+            exit 1
+          fi
+
       - name: Run PostgreSQL migration cycle
         shell: bash
         env:
