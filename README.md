@@ -4,7 +4,7 @@ Ghateh Iran Image Processor is a self-hosted system whose Internal Pilot uses in
 
 ## Current Status
 
-Sprint 1.9.6 — Runtime PostgreSQL Connectivity Probe completed.
+Sprint 1.9.7.1 — Database Lifespan Ownership Primitive completed.
 
 The backend now includes exactly pinned SQLAlchemy and psycopg binary runtime dependencies and an immutable, secret-safe database configuration boundary. The only supported database URL environment variable is `GHATEH_DATABASE_URL`, and its URL must use the `postgresql+psycopg` driver with explicit credentials, host, port, and database name. This variable is required when database tooling or runtime composition begins.
 
@@ -41,7 +41,11 @@ The application runtime engine ownership boundary now consists of `DatabaseRunti
 
 The runtime Engine uses `QueuePool`, enables connection pre-ping, disables SQL echo, and hides bound statement parameters. Alembic retains its separate migration-only `NullPool` Engine. The `probe_database_connectivity(runtime)` boundary consumes an active `DatabaseRuntime`, borrows one Connection from its existing Engine, executes exactly `SELECT 1`, and requires the scalar result to be integer `1`. The Connection closes when its context exits; the probe does not dispose or replace the Runtime, and a successful probe leaves the same Runtime Engine active. SQLAlchemy connectivity failures propagate to the caller without retry, backoff, or a new timeout policy.
 
-The disposable PostgreSQL CI service runs the Runtime connectivity test before the existing migration-cycle test. The later fresh-database assertion proves that the probe creates no schema, migration revision, or business state. The current `ghateh-api` runner and FastAPI lifespan still do not create or own `DatabaseRuntime`, workers do not create one, and application-startup database policy remains undefined. No readiness endpoint, Session, repository, Unit of Work, ORM metadata, business migration, or business table exists yet.
+The disposable PostgreSQL CI service runs the Runtime connectivity test before the existing migration-cycle test. The later fresh-database assertion proves that the probe creates no schema, migration revision, or business state.
+
+The reusable `create_database_lifespan(runtime_factory)` primitive receives a zero-argument `DatabaseRuntime` factory and defers Runtime creation until lifespan entry. Each entry creates one fresh Runtime, exposes it through typed lifespan state under `database_runtime`, and disposes it exactly once on normal or exceptional exit. The primitive does not load environment settings, connect to PostgreSQL, or call the connectivity probe.
+
+The primitive is not wired into `create_app()` yet, and Uvicorn still points directly to the existing `create_app()` factory. The API therefore does not own a `DatabaseRuntime` in actual execution. No `app.state` mutation, request accessor, startup connectivity policy, readiness endpoint, Session, repository, Unit of Work, ORM metadata, business migration, or business table exists yet.
 
 The backend creates the API through an explicit FastAPI application factory and validates its local runtime binding before starting Uvicorn. Its local liveness route is available at `GET /api/v1/health/live`.
 
@@ -116,4 +120,4 @@ Sprint 0 and Sprint 0.1 define and correct the product requirements, modular-mon
 
 ## Next Steps
 
-The next implementation increment is FastAPI Lifespan Database Ownership.
+The next implementation increment is FastAPI Application Factory Lifespan Wiring.
