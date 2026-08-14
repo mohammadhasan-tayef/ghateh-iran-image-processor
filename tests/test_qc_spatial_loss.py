@@ -189,6 +189,32 @@ def test_f_multi_object_ok() -> None:
     assert rep["decision"] == "pass", rep
 
 
+def test_g_shadow_removal_ok() -> None:
+    """Contact shadow in RAW correctly removed in FINAL must not force REVIEW."""
+    size = 420
+    rgb = np.full((size, size, 3), 208, dtype=np.uint8)
+    y0, y1, x0, x1 = 100, 300, 120, 300
+    rgb[y0:y1, x0:x1] = (42, 42, 46)
+    # Soft penumbra under product (dark + unstructured)
+    for i, dy in enumerate(range(6, 40)):
+        shade = int(208 - max(6, 48 - i))
+        rgb[y1 : min(size, y1 + dy), x0 + 8 : x1 - 8] = (shade, shade, shade)
+    alpha = np.zeros((size, size), dtype=np.uint8)
+    alpha[y0:y1, x0:x1] = 255
+    rep, rf = _qc_from_rgba(rgb, alpha)
+    assert float(rf.get("large_contiguous_foreground_loss") or 0) < 0.5, rf
+    assert str(rf.get("spatial_evidence_confidence") or "").upper() in {
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+    }, rf
+    assert rep["decision"] in ("pass", "second_pass"), (
+        rep.get("decision"),
+        rep.get("triggered_rules"),
+        rf,
+    )
+
+
 def main() -> int:
     tests = [
         test_a_translate_scale_ok,
@@ -197,6 +223,7 @@ def main() -> int:
         test_d_arm_removed_review,
         test_e_internal_hole_ok,
         test_f_multi_object_ok,
+        test_g_shadow_removal_ok,
     ]
     failed = 0
     for t in tests:

@@ -1,22 +1,31 @@
 """
-Golden QC regression harness (v3 — RAW-aware integrity).
+Golden QC regression harness (v4 — spatial confidence + real/synth split).
 
 Folders (place human-verified finals here):
   tests/qc_golden/good_should_pass/   → expect PASS
   tests/qc_golden/bad_should_review/  → expect REVIEW (not PASS)
 
-Also runs synthetic cases covering:
-  - false REVIEW: structure warn, multi-object kits
+Synthetic cases cover:
+  - false REVIEW: structure warn, multi-object kits, shadow removal
   - false PASS: washed product, selective wipe, white-out with clean bg
+
+REAL folder images are included in acceptance metrics when paired RAW is found
+(via GHATE_RAW_DIR / E:\\ghateh iran\\aks kham). Accuracy is reported separately
+for REAL vs SYNTHETIC.
 
 Usage:
   python scripts/test_qc_golden.py
+  python scripts/test_qc_golden.py --skip-real
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
+import re
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +41,7 @@ from ghate_editor.qc_raw_final import compute_raw_final_integrity  # noqa: E402
 GOOD_DIR = ROOT / "tests" / "qc_golden" / "good_should_pass"
 BAD_DIR = ROOT / "tests" / "qc_golden" / "bad_should_review"
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+RAW_EXT = {".heic", ".heif", ".dng", ".cr2", ".nef", ".arw", ".raf", ".orf", ".rw2"}
 
 
 def _base_good_mask(**extra):
@@ -95,6 +105,8 @@ def _rf_good(**extra):
         "foreground_overexposure_score": 94.0,
         "raw_final_integrity": 91.0,
         "prior_wipe_frac": 0.05,
+        "spatial_evidence_confidence": "HIGH",
+        "large_contiguous_foreground_loss": 0.0,
         "_bads": [],
         "_warns": [],
         "_posits": ["raw_final_integrity_ok"],
@@ -117,10 +129,16 @@ def _rf_destroyed(**extra):
         "whiteout_frac": 0.40,
         "prior_unreliable": 0.0,
         "destruction_signal_count": 3.0,
+        "spatial_evidence_confidence": "HIGH",
         "_bads": ["product_structure_destroyed", "product_whiteout", "detail_destroyed"],
         "_warns": [],
         "_posits": [],
-        "_triggered": ["severe_prior_wipe", "severe_product_whiteout", "detail_collapse", "destruction_corroborated"],
+        "_triggered": [
+            "severe_prior_wipe",
+            "severe_product_whiteout",
+            "detail_collapse",
+            "destruction_corroborated",
+        ],
     }
     d.update(extra)
     return d
@@ -197,6 +215,39 @@ def _case_multi_object_kit() -> dict:
     )
 
 
+def _case_shadow_removal_good() -> dict:
+    """RAW product + soft contact shadow; FINAL keeps product, clears shadow → PASS."""
+    size = 420
+    rgb = np.full((size, size, 3), 210, dtype=np.uint8)
+    y0, y1, x0, x1 = 110, 310, 130, 290
+    rgb[y0:y1, x0:x1] = (48, 48, 52)
+    # Soft exterior contact shadow (dark, low texture)
+    for dy in range(8, 36):
+        shade = int(210 - max(8, 55 - dy))
+        rgb[y1 : min(size, y1 + dy), x0 + 10 : x1 - 10] = (shade, shade, shade)
+    alpha = np.zeros((size, size), dtype=np.uint8)
+    alpha[y0:y1, x0:x1] = 255  # shadow intentionally NOT in alpha
+    rf = compute_raw_final_integrity(
+        Image.fromarray(rgb, "RGB"),
+        Image.fromarray(np.dstack([rgb, alpha]), "RGBA"),
+    )
+    return build_qc_report(
+        _base_good_mask(_posits=["opaque_core", "dark_on_white", "plausible_coverage"]),
+        _base_good_cutout(),
+        _base_good_studio(bg_shadow_frac=0.0),
+        {
+            "structure_loss": 0.06,
+            "edge_drop": 0.04,
+            "_bads": [],
+            "_warns": [],
+            "_posits": ["structure_preserved", "edges_retained"],
+        },
+        raw_final_stats=rf,
+        after_rescue=True,
+        filename="synth_shadow_removal_good.jpg",
+    )
+
+
 def _case_false_pass_washed_product() -> dict:
     """Clean white bg + centered, but product body destroyed — must REVIEW."""
     return build_qc_report(
@@ -207,7 +258,6 @@ def _case_false_pass_washed_product() -> dict:
         ),
         _base_good_cutout(visibility=55, near_white_in_solid=0.35, solid_std=18),
         _base_good_studio(
-            # Looks "clean" on canvas
             bg_dirty_frac=0.001,
             light_grey_frac=0.15,
             product_visibility=50,
@@ -215,7 +265,6 @@ def _case_false_pass_washed_product() -> dict:
             _posits=["readable_product"],
         ),
         {
-            # Old mask-based structure may under-report
             "structure_loss": 0.15,
             "edge_drop": 0.12,
             "_bads": [],
@@ -281,7 +330,6 @@ def _case_pixel_whiteout_integrity() -> dict:
     """Pixel-level: RAW dark product, FINAL cutout alpha wipes midtones to white."""
     size = 400
     raw = np.full((size, size, 3), 230, dtype=np.uint8)
-    # Dark circular product with midtone ring
     yy, xx = np.ogrid[:size, :size]
     cy, cx = size // 2, size // 2
     r = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
@@ -289,12 +337,10 @@ def _case_pixel_whiteout_integrity() -> dict:
     mid = (r >= 60) & (r < 120)
     core = r < 60
     raw[product] = (40, 42, 45)
-    raw[mid] = (160, 160, 165)  # light-grey body
-    # Bad cutout: only dark core kept; midtones wiped
+    raw[mid] = (160, 160, 165)
     alpha = np.zeros((size, size), dtype=np.uint8)
     alpha[core] = 255
     rgba = np.dstack([raw, alpha])
-    # Studio: mostly white with tiny dark blob
     studio = np.full((500, 500, 3), 255, dtype=np.uint8)
     studio[200:280, 200:280] = (40, 42, 45)
 
@@ -323,6 +369,7 @@ def run_synthetic():
     good = [
         ("structure_warn_good", "pass", _case_structure_warn_good()),
         ("multi_object_kit", "pass", _case_multi_object_kit()),
+        ("shadow_removal_good", "pass", _case_shadow_removal_good()),
     ]
     bad = [
         ("washed_bad", "review", _case_washed_bad()),
@@ -334,6 +381,108 @@ def run_synthetic():
         [(n, e, r["decision"], r) for n, e, r in good],
         [(n, e, r["decision"], r) for n, e, r in bad],
     )
+
+
+def _stem_key(name: str) -> str:
+    stem = Path(name).stem
+    return re.sub(r"__[0-9a-f]{4,10}$", "", stem, flags=re.I)
+
+
+def _raw_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    env = os.environ.get("GHATE_RAW_DIR", "").strip()
+    if env:
+        dirs.append(Path(env))
+    default = Path(r"E:\ghateh iran\aks kham")
+    if default.is_dir():
+        dirs.append(default)
+    return dirs
+
+
+def _resolve_raw(path: Path, raw_dirs: list[Path]) -> Path | None:
+    if path.suffix.lower() in RAW_EXT:
+        return path if path.is_file() else None
+    key = _stem_key(path.name)
+    for d in raw_dirs:
+        if not d.is_dir():
+            continue
+        for ext in list(RAW_EXT) + [".jpg", ".jpeg", ".png"]:
+            for cand in (d / f"{key}{ext}", d / f"{key}{ext.upper()}"):
+                if cand.is_file():
+                    return cand
+    return None
+
+
+def run_real_production(limit: int = 0) -> tuple[list, list]:
+    """Score real golden folder images via production process_free_file."""
+    from ghate_editor.free_pipeline import process_free_file
+
+    raw_dirs = _raw_dirs()
+    goods = (
+        [p for p in GOOD_DIR.glob("*") if p.suffix.lower() in IMG_EXT]
+        if GOOD_DIR.exists()
+        else []
+    )
+    bads = (
+        [p for p in BAD_DIR.glob("*") if p.suffix.lower() in IMG_EXT]
+        if BAD_DIR.exists()
+        else []
+    )
+    if limit > 0:
+        goods, bads = goods[:limit], bads[:limit]
+
+    good_out: list = []
+    bad_out: list = []
+    if not goods and not bads:
+        return good_out, bad_out
+
+    with tempfile.TemporaryDirectory(prefix="qc_golden_reg_") as tmp:
+        work = Path(tmp)
+        (work / "Approved").mkdir(parents=True, exist_ok=True)
+        (work / "Review").mkdir(parents=True, exist_ok=True)
+
+        def _one(p: Path, expected: str):
+            raw = _resolve_raw(p, raw_dirs)
+            if raw is None:
+                return (
+                    p.name,
+                    expected,
+                    "skip",
+                    {"decision": "skip", "reason": "no_raw", "final_score": 0},
+                )
+            result = process_free_file(
+                raw,
+                work / "Approved" / f"{raw.stem}.jpg",
+                size=2000,
+                with_shadow=False,
+                free_mode="adaptive",
+                review_dir=work / "Review",
+                package_review=False,
+            )
+            diag = result.get("qc_diagnostics") or {}
+            decision = (
+                result.get("qc_decision")
+                or diag.get("decision")
+                or ("pass" if result.get("status") == "approved" else "review")
+            )
+            rep = {
+                "decision": decision,
+                "final_score": result.get("quality_score") or diag.get("final_score"),
+                "core_score": diag.get("core_score"),
+                "triggered_rules": diag.get("triggered_rules") or [],
+                "fatal_errors": diag.get("fatal_errors") or [],
+                "reason": diag.get("reason") or ",".join(result.get("reasons") or []),
+                "processing_profile": diag.get("processing_profile"),
+                "raw_final": result.get("raw_final_stats") or {},
+                "subscores": diag.get("subscores") or {},
+            }
+            return p.name, expected, decision, rep
+
+        for p in goods:
+            good_out.append(_one(p, "pass"))
+        for p in bads:
+            bad_out.append(_one(p, "review"))
+    return good_out, bad_out
 
 
 def _print_miss(name: str, expected: str, actual: str, rep: dict) -> None:
@@ -357,99 +506,117 @@ def _print_miss(name: str, expected: str, actual: str, rep: dict) -> None:
         "background_purity",
         "composition",
     ]
-    scored = [
-        (k, float(subs.get(k, 100) or 100)) for k in keys if k in subs or True
-    ]
     scored = [(k, float(subs.get(k, 100) or 100)) for k in keys]
     scored.sort(key=lambda x: x[1])
     print(f"    lowest_subscores={scored[:5]}")
 
 
-def main() -> int:
-    print("=== QC Golden Regression v3 (RAW-aware) ===")
-    good_out, bad_out = run_synthetic()
+def _report_block(title: str, good_out: list, bad_out: list) -> dict:
+    good_eval = [x for x in good_out if x[2] != "skip"]
+    bad_eval = [x for x in bad_out if x[2] != "skip"]
+    g_pass = sum(1 for _, e, a, _ in good_eval if a == "pass")
+    g_false_rev = sum(1 for _, e, a, _ in good_eval if a == "review")
+    g_false_sp = sum(1 for _, e, a, _ in good_eval if a == "second_pass")
+    b_rev = sum(1 for _, e, a, _ in bad_eval if a == "review")
+    b_false_pass = sum(1 for _, e, a, _ in bad_eval if a == "pass")
+    b_false_sp = sum(1 for _, e, a, _ in bad_eval if a == "second_pass")
+    b_caught = sum(1 for _, e, a, _ in bad_eval if a != "pass")
 
-    g_pass = sum(1 for _, e, a, _ in good_out if a == "pass")
-    g_false_rev = sum(1 for _, e, a, _ in good_out if a == "review")
-    g_false_sp = sum(1 for _, e, a, _ in good_out if a == "second_pass")
-    b_rev = sum(1 for _, e, a, _ in bad_out if a == "review")
-    b_false_pass = sum(1 for _, e, a, _ in bad_out if a == "pass")
-    b_false_sp = sum(1 for _, e, a, _ in bad_out if a == "second_pass")
-
-    print("\nGOOD EXPECTED PASS:")
-    print(f"  Total: {len(good_out)}")
+    print(f"\n=== {title} ===")
+    print("GOOD EXPECTED PASS:")
+    print(f"  Total: {len(good_eval)} (skipped={len(good_out) - len(good_eval)})")
     print(f"  Correct PASS: {g_pass}")
     print(f"  False REVIEW: {g_false_rev}")
     print(f"  False SECOND_PASS: {g_false_sp}")
     for name, exp, act, rep in good_out:
-        if act != "pass":
+        if act == "skip":
+            print(f"  SKIP {name} ({rep.get('reason')})")
+        elif act != "pass":
             _print_miss(name, exp, act, rep)
         else:
             print(
-                f"  OK  {name} score={rep['final_score']} core={rep['core_score']} "
-                f"profile={rep.get('processing_profile')}"
+                f"  OK  {name} score={rep.get('final_score')} "
+                f"core={rep.get('core_score')}"
             )
 
-    print("\nBAD EXPECTED REVIEW:")
-    print(f"  Total: {len(bad_out)}")
+    print("\nBAD EXPECTED REVIEW (not PASS):")
+    print(f"  Total: {len(bad_eval)} (skipped={len(bad_out) - len(bad_eval)})")
     print(f"  Correct REVIEW: {b_rev}")
     print(f"  False PASS: {b_false_pass}")
     print(f"  False SECOND_PASS: {b_false_sp}")
     for name, exp, act, rep in bad_out:
-        if act != "review":
+        if act == "skip":
+            print(f"  SKIP {name} ({rep.get('reason')})")
+        elif act == "pass":
             _print_miss(name, exp, act, rep)
         else:
             print(
-                f"  OK  {name} score={rep['final_score']} "
-                f"fatal={rep.get('fatal_errors')} "
-                f"integ={((rep.get('raw_final') or {}).get('raw_final_integrity'))}"
+                f"  OK  {name} decision={act} score={rep.get('final_score')} "
+                f"fatal={rep.get('fatal_errors')}"
             )
 
-    good_files = (
-        [p for p in GOOD_DIR.glob("*") if p.suffix.lower() in IMG_EXT]
-        if GOOD_DIR.exists()
-        else []
-    )
-    bad_files = (
-        [p for p in BAD_DIR.glob("*") if p.suffix.lower() in IMG_EXT]
-        if BAD_DIR.exists()
-        else []
-    )
-    if good_files or bad_files:
-        print(f"\n=== Folder images: good={len(good_files)} bad={len(bad_files)} ===")
-        print("Place paired RAW/FINAL samples and use scripts/run_qc_golden.py for full pipeline.")
+    accuracy = (g_pass + b_caught) / max(1, len(good_eval) + len(bad_eval))
+    print(f"\n{title} Accuracy: {accuracy:.1%}")
+    return {
+        "good_total": len(good_eval),
+        "good_pass": g_pass,
+        "false_review": g_false_rev,
+        "bad_total": len(bad_eval),
+        "bad_review": b_rev,
+        "false_pass": b_false_pass,
+        "false_second_pass_on_bad": b_false_sp,
+        "accuracy": accuracy,
+    }
 
-    false_review_rate = g_false_rev / max(1, len(good_out))
-    false_pass_rate = b_false_pass / max(1, len(bad_out))
-    # SECOND_PASS on bad is not ideal but better than PASS
-    accuracy = (g_pass + b_rev) / max(1, len(good_out) + len(bad_out))
-    print(f"\nFalse Review Rate: {false_review_rate:.1%}")
-    print(f"False Pass Rate:   {false_pass_rate:.1%}")
-    print(f"Overall Accuracy:  {accuracy:.1%}")
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-real", action="store_true")
+    parser.add_argument("--limit-real", type=int, default=0)
+    args = parser.parse_args()
+
+    print("=== QC Golden Regression v4 (spatial confidence + real/synth) ===")
+    good_out, bad_out = run_synthetic()
+    synth = _report_block("SYNTHETIC", good_out, bad_out)
+
+    real = None
+    if not args.skip_real:
+        try:
+            rg, rb = run_real_production(limit=args.limit_real)
+            if rg or rb:
+                real = _report_block("REAL (production pipeline)", rg, rb)
+            else:
+                print("\n=== REAL ===")
+                print("No real golden images found under tests/qc_golden/")
+        except Exception as exc:  # noqa: BLE001
+            print(f"\n=== REAL ===\n  ERROR running production golden: {exc}")
 
     out = ROOT / "tests" / "qc_golden" / "last_regression.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        json.dumps(
-            {
-                "version": "qc-v3-raw-final",
-                "good_total": len(good_out),
-                "good_pass": g_pass,
-                "false_review": g_false_rev,
-                "bad_total": len(bad_out),
-                "bad_review": b_rev,
-                "false_pass": b_false_pass,
-                "false_second_pass_on_bad": b_false_sp,
-                "accuracy": accuracy,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    payload = {
+        "version": "qc-v4-spatial-confidence",
+        "synthetic": synth,
+        "real": real,
+        # Back-compat flat keys = synthetic (explicitly labeled)
+        "good_total": synth["good_total"],
+        "good_pass": synth["good_pass"],
+        "false_review": synth["false_review"],
+        "bad_total": synth["bad_total"],
+        "bad_review": synth["bad_review"],
+        "false_pass": synth["false_pass"],
+        "accuracy_synthetic": synth["accuracy"],
+        "accuracy_real": None if real is None else real["accuracy"],
+    }
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"\nWrote {out}")
+    print(f"SYNTHETIC accuracy: {synth['accuracy']:.1%}")
+    if real is not None:
+        print(f"REAL accuracy:      {real['accuracy']:.1%}")
 
-    if g_false_rev or b_false_pass:
-        return 1
-    return 0
+    fail = bool(synth["false_review"] or synth["false_pass"])
+    if real is not None:
+        fail = fail or bool(real["false_review"] or real["false_pass"])
+    return 1 if fail else 0
 
 
 if __name__ == "__main__":

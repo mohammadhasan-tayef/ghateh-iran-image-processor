@@ -234,18 +234,29 @@ def score_object_completeness(
         s -= min(18.0, collapsed * 5.0)
         triggered.append("shape_collapse")
 
-    # RAW-aware spatial completeness (surviving regions must not hide missing halves)
-    if survival < 95.0:
-        s -= _lerp_penalty(max(0.0, 88.0 - survival), 0.0, 40.0, 36.0)
-    if largest_miss >= 0.10:
-        s -= min(40.0, largest_miss * 120.0)
-        triggered.append("largest_missing_region")
-    if regional >= 25.0:
-        s -= min(28.0, regional * 0.45)
-        triggered.append("regional_completeness_loss")
-    if "large_contiguous_foreground_loss" in bads:
-        s = min(s, 22.0)
-        triggered.append("spatial_loss_completeness_cap")
+    # RAW-aware spatial completeness:
+    # Do NOT multi-penalize the same spatial heuristic here AND via spatial_block.
+    # Soft info only unless HIGH-confidence hard loss already confirmed.
+    spatial_conf = str(rf.get("spatial_evidence_confidence") or "LOW").upper()
+    hard_spatial = (
+        "large_contiguous_foreground_loss" in bads
+        and spatial_conf == "HIGH"
+        and float(rf.get("large_contiguous_foreground_loss") or 0) >= 0.5
+    )
+    if hard_spatial:
+        # Completeness capped once — decision authority lives in spatial_block
+        s = min(s, 35.0)
+        triggered.append("spatial_loss_completeness_deferred_to_block")
+    elif spatial_conf == "HIGH":
+        if survival < 90.0:
+            s -= _lerp_penalty(max(0.0, 85.0 - survival), 0.0, 45.0, 22.0)
+        if largest_miss >= 0.14:
+            s -= min(22.0, largest_miss * 80.0)
+            triggered.append("largest_missing_region")
+    elif spatial_conf == "MEDIUM" and survival < 72.0 and largest_miss >= 0.20:
+        s -= 8.0
+        triggered.append("spatial_completeness_soft")
+    # LOW confidence: no completeness penalty from spatial heuristic alone
 
     if "catastrophic_structure_loss" in bads and sl >= cfg.instant_struct_loss:
         s = min(s, 28.0)
@@ -493,12 +504,11 @@ def destruction_corroborated(
         and (edge_rf < 70.0 or alpha_edge < 0.65 or sl >= 0.28)
     ):
         signals += 1
-    if _f(rf, "large_contiguous_foreground_loss") >= 0.5:
+    if _f(rf, "large_contiguous_foreground_loss") >= 0.5 and str(
+        rf.get("spatial_evidence_confidence") or ""
+    ).upper() in {"HIGH", "MEDIUM"}:
         signals += 1
-    if _f(rf, "largest_missing_region_ratio") >= 0.18 and _f(
-        rf, "foreground_survival_score", 100.0
-    ) < 78.0:
-        signals += 1
+    # Do NOT also count largest_missing_region — same spatial heuristic family
 
     # Explicit pre-confirmed tag from compute_raw_final_integrity
     if _f(rf, "destruction_signal_count") >= 2:
@@ -580,11 +590,21 @@ def sanitize_destruction_and_fragmentation(
                 rf["raw_final_integrity"] = integ
                 triggered.append("structure_score_repaired_fp")
 
-    # Never demote explicit spatial contiguous loss
+    # Retain spatial hard loss only when confidence / verifier allows
+    spatial_conf = str(rf.get("spatial_evidence_confidence") or "LOW").upper()
+    verified = _f(rf, "spatial_verified") >= 0.5
     if _f(rf, "large_contiguous_foreground_loss") >= 0.5:
-        if "large_contiguous_foreground_loss" not in bads:
-            bads.append("large_contiguous_foreground_loss")
-        triggered.append("spatial_loss_retained")
+        if spatial_conf == "HIGH" or verified:
+            if "large_contiguous_foreground_loss" not in bads:
+                bads.append("large_contiguous_foreground_loss")
+            triggered.append("spatial_loss_retained")
+        else:
+            # LOW/MEDIUM without verification must not stay as hard bad
+            bads = [b for b in bads if b != "large_contiguous_foreground_loss"]
+            rf["large_contiguous_foreground_loss"] = 0.0
+            if "spatial_product_loss_warn" not in warns:
+                warns.append("spatial_product_loss_warn")
+            triggered.append("spatial_loss_demoted_low_confidence")
 
     return bads, warns, posits, struct_p, integ
 
@@ -869,23 +889,43 @@ def build_qc_report(
     has_destruction = any(t in destruction for t in bads)
     # Only confirmed destruction blocks; uncorroborated tags already demoted
     if has_destruction and not destruction_corroborated(rf, structure_stats, bads):
+        spatial_ok = "large_contiguous_foreground_loss" in bads and (
+            str(rf.get("spatial_evidence_confidence") or "").upper() == "HIGH"
+            or _f(rf, "spatial_verified") >= 0.5
+        )
         has_destruction = (
             "product_whiteout" in bads
             or "detail_destroyed" in bads
-            or "large_contiguous_foreground_loss" in bads
+            or spatial_ok
         )
     pass_bar = cfg.pass_min_after_rescue if after_rescue else cfg.pass_min
 
     survival = _f(rf, "foreground_survival_score", 100.0)
     largest_miss = _f(rf, "largest_missing_region_ratio")
-    spatial_block = (
-        "large_contiguous_foreground_loss" in bads
-        or (
-            largest_miss >= 0.18
-            and survival < 78.0
-            and _f(rf, "evidence_wipe_frac") >= 0.12
+    spatial_conf = str(rf.get("spatial_evidence_confidence") or "LOW").upper()
+    spatial_verified = _f(rf, "spatial_verified") >= 0.5
+    # Spatial block requires HIGH confidence OR verifier confirmation.
+    # LOW confidence never independently forces REVIEW.
+    spatial_block = False
+    if "large_contiguous_foreground_loss" in bads and (
+        spatial_conf == "HIGH" or spatial_verified
+    ):
+        spatial_block = True
+    elif (
+        spatial_conf == "HIGH"
+        and (
+            (
+                largest_miss >= 0.18
+                and survival < 78.0
+                and _f(rf, "evidence_wipe_frac") >= 0.12
+            )
+            or (
+                survival < 74.0
+                and _f(rf, "evidence_wipe_frac") >= 0.20
+            )
         )
-    )
+    ):
+        spatial_block = True
 
     if spatial_block:
         decision: QCDecision = "review"
@@ -961,7 +1001,15 @@ def build_qc_report(
         triggered.append("core_quality_pass_override")
 
     if decision == "pass" and (
-        has_destruction or spatial_block or "large_contiguous_foreground_loss" in bads
+        has_destruction
+        or spatial_block
+        or (
+            "large_contiguous_foreground_loss" in bads
+            and (
+                str(rf.get("spatial_evidence_confidence") or "").upper() == "HIGH"
+                or _f(rf, "spatial_verified") >= 0.5
+            )
+        )
     ):
         decision = "review"
         reason = "Product destruction / spatial loss tags present — REVIEW"
@@ -969,9 +1017,17 @@ def build_qc_report(
 
     # Incomplete product: catastrophic structure bad + very low completeness
     if decision == "pass" and "catastrophic_structure_loss" in bads and obj_s < 40.0:
-        decision = "review"
-        reason = "Severe object incompleteness with structure loss — REVIEW"
-        triggered.append("incomplete_product_review")
+        # Do not treat softened/contradicted structure as independent incompleteness
+        if (
+            "structure_score_repaired_contradiction" in triggered
+            or "destruction_uncorroborated_demoted" in triggered
+            or "structure_bad_softened" in triggered
+        ) and integ >= 68.0:
+            triggered.append("incomplete_product_softened")
+        else:
+            decision = "review"
+            reason = "Severe object incompleteness with structure loss — REVIEW"
+            triggered.append("incomplete_product_review")
 
     result = QCResult(
         filename=filename,

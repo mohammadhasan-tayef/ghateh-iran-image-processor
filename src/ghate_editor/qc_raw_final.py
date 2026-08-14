@@ -530,23 +530,37 @@ def compute_raw_final_integrity(
         grid=10,
     )
     for k, v in spatial.items():
+        # Keep ndarray helpers only for in-process verifier; strip before return
+        if str(k).startswith("_"):
+            stats[k] = v
+            continue
         stats[k] = v
+    if float(spatial.get("prior_shadow_excluded") or 0.0) > 0.0:
+        triggered.append("prior_shadow_excluded")
+
     survival = float(spatial.get("foreground_survival_score") or 100.0)
     largest_miss = float(spatial.get("largest_missing_region_ratio") or 0.0)
     regional_loss = float(spatial.get("regional_structure_loss_score") or 0.0)
     large_contig = float(spatial.get("large_contiguous_foreground_loss") or 0.0) >= 0.5
+    spatial_candidate = float(spatial.get("spatial_loss_candidate") or 0.0) >= 0.5
+    spatial_conf = str(spatial.get("spatial_evidence_confidence") or "LOW").upper()
 
-    # Fold spatial integrity into structure score (do not average away catastrophe)
-    if large_contig:
+    # Fold spatial into structure ONLY once, and only when authoritative.
+    # MEDIUM/LOW candidates wait for verifier — do not double-penalize scores.
+    if large_contig and spatial_conf == "HIGH":
         struct_score = min(struct_score, 32.0)
         triggered.append("large_contiguous_foreground_loss")
         bads.append("large_contiguous_foreground_loss")
-    elif largest_miss >= 0.12 or regional_loss >= 28.0:
-        struct_score = min(struct_score, max(45.0, struct_score - 0.55 * regional_loss))
-        triggered.append("regional_structure_loss")
-        if largest_miss >= 0.16 and survival < 78.0:
+    elif spatial_candidate and spatial_conf in {"MEDIUM", "LOW"}:
+        triggered.append("spatial_loss_pending_verifier")
+        if "spatial_product_loss_warn" not in warns:
             warns.append("spatial_product_loss_warn")
-    if survival < 70.0:
+    elif spatial_conf == "HIGH" and (largest_miss >= 0.16 or regional_loss >= 32.0):
+        struct_score = min(struct_score, max(50.0, struct_score - 0.35 * regional_loss))
+        triggered.append("regional_structure_loss")
+        if largest_miss >= 0.18 and survival < 75.0:
+            warns.append("spatial_product_loss_warn")
+    if survival < 70.0 and spatial_conf == "HIGH":
         struct_score = min(struct_score, max(40.0, survival * 0.85))
 
     # --- Corroborated destruction only (never a single wipe heuristic) ---
@@ -574,7 +588,8 @@ def compute_raw_final_integrity(
     if selective and mid_wipe >= 0.50 and kept_frac < 0.55 and alpha_edge_keep < 0.70:
         signals += 1
         signal_names.append("selective_alpha_edge")
-    if large_contig or (largest_miss >= 0.20 and survival < 75.0):
+    # At most ONE spatial signal — independence matters (no double-count)
+    if large_contig and spatial_conf == "HIGH":
         signals += 1
         signal_names.append("spatial_contiguous_loss")
     stats["destruction_signal_count"] = float(signals)
@@ -637,4 +652,10 @@ def compute_raw_final_integrity(
     stats["_warns"] = warns
     stats["_posits"] = posits
     stats["_triggered"] = triggered
+    # Drop heavy arrays unless a verifier will consume them immediately
+    if float(stats.get("spatial_loss_candidate") or 0.0) < 0.5 or str(
+        stats.get("spatial_evidence_confidence") or ""
+    ).upper() == "HIGH":
+        stats.pop("_lost_grid", None)
+        stats.pop("_evidence", None)
     return stats

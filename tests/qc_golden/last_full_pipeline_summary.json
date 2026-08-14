@@ -1,0 +1,12 @@
+{
+  "version": "free-v1.14.5",
+  "dataset": "real",
+  "good_total": 9,
+  "good_pass": 9,
+  "false_review": 0,
+  "bad_total": 7,
+  "bad_caught": 7,
+  "false_pass": 0,
+  "real_accuracy": 1.0,
+  "unresolved": []
+}

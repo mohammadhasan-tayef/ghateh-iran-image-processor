@@ -33,7 +33,7 @@ try:
 except Exception:  # noqa: BLE001
     HEIC_OK = False
 
-FREE_PIPELINE_VERSION = "free-v1.14.4"
+FREE_PIPELINE_VERSION = "free-v1.14.5"
 FREE_MODEL_FAST = "u2net"
 FREE_MODEL_QUALITY = "birefnet-general"
 FREE_FALLBACK_MODEL = "u2netp"
@@ -1994,6 +1994,35 @@ def _run_once(
                 working, rgba, studio_rgb=analysis, cfg=None, features=raw_feats
             )
             timings["qc_raw_final"] = time.perf_counter() - t_rf
+            # Ambiguous spatial loss → alternate local segmentation verifier
+            if (
+                float(rfstats.get("spatial_loss_candidate") or 0.0) >= 0.5
+                and str(rfstats.get("spatial_evidence_confidence") or "").upper()
+                in {"LOW", "MEDIUM"}
+                and float(rfstats.get("large_contiguous_foreground_loss") or 0.0) < 0.5
+            ):
+                try:
+                    from .qc_spatial_verify import verify_ambiguous_spatial_loss
+
+                    t_sv = time.perf_counter()
+                    rfstats = verify_ambiguous_spatial_loss(
+                        working,
+                        rgba,
+                        rfstats,
+                        primary_model=str(meta.get("model") or ""),
+                        max_side=512,
+                    )
+                    timings["qc_spatial_verify"] = time.perf_counter() - t_sv
+                except Exception as sv_exc:  # noqa: BLE001
+                    rfstats.setdefault("_triggered", []).append(
+                        f"spatial_verifier_skip:{type(sv_exc).__name__}"
+                    )
+                    rfstats.pop("_lost_grid", None)
+                    rfstats.pop("_evidence", None)
+                    timings["qc_spatial_verify"] = 0.0
+            else:
+                rfstats.pop("_lost_grid", None)
+                rfstats.pop("_evidence", None)
         except Exception as rf_exc:  # noqa: BLE001
             rfstats = {
                 "structure_preservation_score": 70.0,
@@ -2451,6 +2480,27 @@ def process_free_file(
             "proc_state": "review",
             "timings": timings_all,
             "edit_sec": timings_all.get("total", 0.0),
+            "qc_decision": meta.get("qc_decision")
+            or review_meta.get("qc_decision")
+            or "review",
+            "quality_score": meta.get("quality_score")
+            or review_meta.get("quality_score"),
+            "raw_final_stats": meta.get("raw_final_stats")
+            or review_meta.get("raw_final_stats"),
+            "qc_diagnostics": meta.get("qc_diagnostics")
+            or review_meta.get("qc_diagnostics"),
+            "meta": {
+                "qc_decision": meta.get("qc_decision") or review_meta.get("qc_decision"),
+                "quality_score": meta.get("quality_score")
+                or review_meta.get("quality_score"),
+                "raw_final_stats": meta.get("raw_final_stats")
+                or review_meta.get("raw_final_stats"),
+                "qc_diagnostics": meta.get("qc_diagnostics")
+                or review_meta.get("qc_diagnostics"),
+                "confidence_zone": meta.get("confidence_zone")
+                or review_meta.get("confidence_zone"),
+                "model": meta.get("model") or review_meta.get("model"),
+            },
         }
 
     # --- DECODE ---
@@ -2847,6 +2897,24 @@ def process_free_file(
                     "proc_state": "approved",
                     "timings": timings_all,
                     "edit_sec": timings_all.get("total", 0.0),
+                    "qc_decision": meta.get("qc_decision"),
+                    "quality_score": meta.get("quality_score"),
+                    "raw_final_stats": meta.get("raw_final_stats"),
+                    "qc_diagnostics": meta.get("qc_diagnostics"),
+                    "meta": {
+                        k: v
+                        for k, v in meta.items()
+                        if k
+                        in {
+                            "qc_decision",
+                            "quality_score",
+                            "raw_final_stats",
+                            "qc_diagnostics",
+                            "confidence_zone",
+                            "model",
+                            "timings",
+                        }
+                    },
                 }
 
         # --- REVIEW (any usable candidate) ---
