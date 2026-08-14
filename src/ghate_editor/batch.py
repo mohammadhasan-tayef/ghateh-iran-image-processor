@@ -778,6 +778,10 @@ def run_batch(
 
     save_cache(cfg.output_dir, cache)
     final_stats = build_timing_stats(state)
+    processed = max(1, int(state.succeeded) + int(state.reviewed) + int(state.failed))
+    pass_pct = 100.0 * float(state.succeeded) / float(processed)
+    review_pct = 100.0 * float(state.reviewed) / float(processed)
+    fail_pct = 100.0 * float(state.failed) / float(processed)
     _log(
         "Batch completed\n"
         f"TOTAL: {state.total}\n"
@@ -785,9 +789,19 @@ def run_batch(
         f"REVIEW: {state.reviewed}\n"
         f"FAILED: {state.failed}\n"
         f"SKIPPED: {state.skipped}\n"
+        f"PASS %: {pass_pct:.1f}\n"
+        f"REVIEW %: {review_pct:.1f}\n"
+        f"FAILED %: {fail_pct:.1f}\n"
         f"Elapsed time: {final_stats['elapsed']}\n"
         f"Average seconds/image: {final_stats['sec_per_img']:.2f}"
     )
+    # Diagnostic only — never overrides individual QC decisions
+    if processed >= 8 and review_pct > 90.0 and pass_pct < 5.0:
+        _log(
+            "WARNING possible_qc_regression: REVIEW>90% on an ordinary batch "
+            f"(PASS={pass_pct:.1f}% REVIEW={review_pct:.1f}% FAILED={fail_pct:.1f}%). "
+            "Inspect QC fatal_errors / raw_prior_frac before retuning thresholds."
+        )
     if state.failed_reason_counts:
         parts = [
             f"{k}: {v}" for k, v in sorted(state.failed_reason_counts.items(), key=lambda x: (-x[1], x[0]))

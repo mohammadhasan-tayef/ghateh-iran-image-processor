@@ -419,20 +419,131 @@ def check_instant_reject(
         return "catastrophic_structure_loss"
     if "empty_mask" in bads or "foreground_too_small" in bads:
         return "empty_or_tiny_foreground"
-    # Independent integrity collapse
+    # Independent integrity collapse — only when whiteout/detail truly collapse
     integ = _f(raw_final, "raw_final_integrity", 100.0)
     if raw_final and integ <= cfg.instant_integrity_max:
+        rf_bads = list(raw_final.get("_bads") or [])
         if any(
-            t in (raw_final.get("_bads") or [])
-            for t in (
-                "product_structure_destroyed",
-                "product_whiteout",
-                "detail_destroyed",
-                "edge_structure_lost",
-            )
+            t in rf_bads
+            for t in ("product_whiteout", "detail_destroyed", "empty_or_tiny_foreground")
         ):
             return "raw_final_integrity_collapse"
     return None
+
+
+def destruction_corroborated(
+    rf: dict[str, Any] | None,
+    structure: dict[str, Any] | None,
+    bads: list[str],
+) -> bool:
+    """
+    True only when ≥2 independent integrity signals agree the product is destroyed.
+
+    A lone wipe / structure heuristic with excellent edge/detail/overexposure
+    is treated as a false positive (seen on real dark products on busy floors).
+    """
+    rf = rf or {}
+    structure = structure or {}
+    struct_p = _f(rf, "structure_preservation_score", 75.0)
+    detail_p = _f(rf, "detail_retention_score", 75.0)
+    edge_rf = _f(rf, "raw_final_edge_consistency_score", 75.0)
+    overexp = _f(rf, "foreground_overexposure_score", 80.0)
+    alpha_edge = _f(rf, "strong_edge_keep", edge_rf / 100.0)
+    wipe = _f(rf, "prior_wipe_frac")
+    kept = _f(rf, "prior_kept_frac", 1.0)
+    unreliable = _f(rf, "prior_unreliable") >= 0.5
+    whiteout = _f(rf, "whiteout_frac")
+    sl = _f(structure, "structure_loss")
+    mid_loss = _f(structure, "midtone_loss")
+    edge_drop = _f(structure, "edge_drop")
+
+    signals = 0
+    if struct_p < 50.0:
+        signals += 1
+    if edge_rf < 55.0 or alpha_edge < 0.55:
+        signals += 1
+    if detail_p < 55.0 or "detail_destroyed" in bads:
+        signals += 1
+    if overexp < 55.0 or whiteout >= 0.20 or "product_whiteout" in bads:
+        signals += 1
+    if sl >= 0.35 or mid_loss >= 0.40 or edge_drop >= 0.40:
+        signals += 1
+    if (
+        wipe >= 0.38
+        and kept < 0.45
+        and not unreliable
+        and (edge_rf < 70.0 or alpha_edge < 0.65 or sl >= 0.28)
+    ):
+        signals += 1
+
+    # Explicit pre-confirmed tag from compute_raw_final_integrity
+    if _f(rf, "destruction_signal_count") >= 2:
+        return True
+    return signals >= 2
+
+
+def sanitize_destruction_and_fragmentation(
+    bads: list[str],
+    warns: list[str],
+    posits: list[str],
+    rf: dict[str, Any],
+    structure: dict[str, Any] | None,
+    mask_stats: dict[str, Any] | None,
+    cfg: QCConfig,
+    triggered: list[str],
+) -> tuple[list[str], list[str], list[str], float, float]:
+    """
+    Demote false-positive destruction / soft fragmentation.
+    Returns (bads, warns, posits, struct_p, integ) possibly repaired.
+    """
+    struct_p = _f(rf, "structure_preservation_score", 75.0)
+    detail_p = _f(rf, "detail_retention_score", 75.0)
+    edge_rf = _f(rf, "raw_final_edge_consistency_score", 75.0)
+    overexp = _f(rf, "foreground_overexposure_score", 80.0)
+    integ = _f(
+        rf,
+        "raw_final_integrity",
+        (struct_p + detail_p + edge_rf + overexp) / 4.0,
+    )
+
+    # Soften foreground_fragmented unless spray-like / catastrophic holes
+    if "foreground_fragmented" in bads:
+        n_tiny = _f(mask_stats, "n_tiny_components")
+        main_frac = _f(mask_stats, "main_component_frac", 1.0)
+        n_sig = _f(mask_stats, "n_significant_components", 1.0)
+        severe_frag = (n_tiny >= 12 and main_frac < 0.35) or (
+            n_sig >= 8 and main_frac < 0.22
+        )
+        if (
+            not severe_frag
+            or "multi_object_ok" in posits
+            or is_legitimate_multi_object(mask_stats, cfg)
+        ):
+            bads = [b for b in bads if b != "foreground_fragmented"]
+            if "foreground_fragmented" not in warns:
+                warns.append("foreground_fragmented")
+            triggered.append("fragmentation_softened")
+
+    # Demote uncorroborated product_structure_destroyed
+    if "product_structure_destroyed" in bads:
+        if destruction_corroborated(rf, structure, bads):
+            triggered.append("destruction_confirmed")
+        else:
+            bads = [b for b in bads if b != "product_structure_destroyed"]
+            if "structure_integrity_warn" not in warns:
+                warns.append("structure_integrity_warn")
+            triggered.append("destruction_false_positive_demoted")
+            # Contradicted wipe zeroing structure while other channels healthy
+            if edge_rf >= 80.0 and detail_p >= 80.0 and overexp >= 80.0:
+                struct_p = max(struct_p, 72.0)
+                integ = float(
+                    0.35 * struct_p + 0.25 * detail_p + 0.20 * edge_rf + 0.20 * overexp
+                )
+                rf["structure_preservation_score"] = struct_p
+                rf["raw_final_integrity"] = integ
+                triggered.append("structure_score_repaired_fp")
+
+    return bads, warns, posits, struct_p, integ
 
 
 def _weighted(subs: dict[str, float], weights: dict[str, float]) -> float:
@@ -542,17 +653,24 @@ def build_qc_report(
 
     profile = detect_qc_profile(mask_stats, studio_stats, posits, bads, warns)
 
-    rf = raw_final_stats or {}
-    struct_p = _f(rf, "structure_preservation_score", 75.0)
+    rf = dict(raw_final_stats or {})
+    triggered.extend(list(rf.get("_triggered") or []))
+
+    # Demote false-positive destruction / soft fragmentation BEFORE instant reject
+    bads, warns, posits, struct_p, integ = sanitize_destruction_and_fragmentation(
+        bads, warns, posits, rf, structure_stats, mask_stats, cfg, triggered
+    )
     detail_p = _f(rf, "detail_retention_score", 75.0)
     edge_rf = _f(rf, "raw_final_edge_consistency_score", 75.0)
     overexp = _f(rf, "foreground_overexposure_score", 80.0)
-    integ = _f(
-        rf,
-        "raw_final_integrity",
-        (struct_p + detail_p + edge_rf + overexp) / 4.0,
-    )
-    triggered.extend(list(rf.get("_triggered") or []))
+    # Keep rf tags in sync for downstream consumers
+    rf["_bads"] = [b for b in (rf.get("_bads") or []) if b in bads or b not in {
+        "product_structure_destroyed"
+    }]
+    if "product_structure_destroyed" in bads and "product_structure_destroyed" not in (
+        rf.get("_bads") or []
+    ):
+        rf["_bads"] = list(rf.get("_bads") or []) + ["product_structure_destroyed"]
 
     instant = check_instant_reject(bads, structure_stats, cfg, raw_final=rf)
     if instant:
@@ -705,11 +823,19 @@ def build_qc_report(
         "edge_structure_lost",
     }
     has_destruction = any(t in destruction for t in bads)
+    # Only confirmed destruction blocks; uncorroborated tags already demoted
+    if has_destruction and not destruction_corroborated(rf, structure_stats, bads):
+        has_destruction = "product_whiteout" in bads or "detail_destroyed" in bads
     pass_bar = cfg.pass_min_after_rescue if after_rescue else cfg.pass_min
 
-    if has_destruction or integ < cfg.core_second_pass_min:
-        if integ < 40 or (has_destruction and integ < 55):
-            decision: QCDecision = "review"
+    if has_destruction:
+        # Confirmed product destruction → always REVIEW (never PASS)
+        decision: QCDecision = "review"
+        reason = "Corroborated product destruction (RAW vs FINAL) — REVIEW"
+        triggered.append("integrity_forced_review")
+    elif integ < cfg.core_second_pass_min:
+        if integ < 40:
+            decision = "review"
             reason = "Product integrity damaged (RAW vs FINAL) — REVIEW"
             triggered.append("integrity_forced_review")
         else:

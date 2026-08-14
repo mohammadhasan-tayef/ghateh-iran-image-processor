@@ -33,7 +33,7 @@ try:
 except Exception:  # noqa: BLE001
     HEIC_OK = False
 
-FREE_PIPELINE_VERSION = "free-v1.14.1"
+FREE_PIPELINE_VERSION = "free-v1.14.3"
 FREE_MODEL_FAST = "u2net"
 FREE_MODEL_QUALITY = "birefnet-general"
 FREE_FALLBACK_MODEL = "u2netp"
@@ -431,9 +431,12 @@ def evaluate_mask_quality(
                 warns.append("foreground_fragmented")
         elif spray or spray_extreme:
             bads.append("foreground_fragmented")
-        elif significant >= 4 and main_frac < 0.28 and tiny >= 10:
+        elif significant >= 5 and main_frac < 0.22 and tiny >= 14:
+            # Severe spray-like fragmentation only
             bads.append("foreground_fragmented")
         elif significant >= 3 and main_frac < 0.30 and tiny >= 8:
+            warns.append("foreground_fragmented")
+        elif significant >= 4 and main_frac < 0.28:
             warns.append("foreground_fragmented")
 
         if main_frac >= 0.85 and significant <= 2:

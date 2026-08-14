@@ -112,11 +112,15 @@ def _rf_destroyed(**extra):
         "foreground_overexposure_score": 18.0,
         "raw_final_integrity": 24.0,
         "prior_wipe_frac": 0.55,
+        "prior_kept_frac": 0.30,
+        "strong_edge_keep": 0.30,
         "whiteout_frac": 0.40,
+        "prior_unreliable": 0.0,
+        "destruction_signal_count": 3.0,
         "_bads": ["product_structure_destroyed", "product_whiteout", "detail_destroyed"],
         "_warns": [],
         "_posits": [],
-        "_triggered": ["severe_prior_wipe", "severe_product_whiteout", "detail_collapse"],
+        "_triggered": ["severe_prior_wipe", "severe_product_whiteout", "detail_collapse", "destruction_corroborated"],
     }
     d.update(extra)
     return d

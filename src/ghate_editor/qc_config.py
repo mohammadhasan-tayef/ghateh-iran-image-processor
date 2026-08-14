@@ -104,15 +104,15 @@ class QCConfig:
     multi_object_min_comp_frac: float = 0.06
     spray_tiny_max_frac: float = 0.02
 
-    # Instant-reject (severe only)
+    # Instant-reject (severe only).
+    # NOTE: product_structure_destroyed is intentionally NOT here — it requires
+    # corroboration in qc_engine (blind wipe heuristics caused mass false REVIEW).
     instant_reject_reasons: tuple[str, ...] = (
         "empty_mask",
         "final_too_white_small_product",
         "final_washed_out",
         "product_faded",
         "product_whiteout",
-        "product_structure_destroyed",
-        "detail_destroyed",
         "empty_or_tiny_foreground",
     )
     instant_struct_loss: float = 0.48
