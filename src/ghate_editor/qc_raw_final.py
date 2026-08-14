@@ -516,6 +516,39 @@ def compute_raw_final_integrity(
     edge_cons = _clamp(edge_cons)
     overexp_score = _clamp(overexp_score)
 
+    # --- Spatial survival / contiguous product loss (canonical grid) ---
+    from .qc_spatial import compute_spatial_survival
+
+    spatial = compute_spatial_survival(
+        src,
+        alpha,
+        lum_s,
+        edge_s,
+        tex_s,
+        prior_indep=prior_indep,
+        prior_unreliable=prior_unreliable,
+        grid=10,
+    )
+    for k, v in spatial.items():
+        stats[k] = v
+    survival = float(spatial.get("foreground_survival_score") or 100.0)
+    largest_miss = float(spatial.get("largest_missing_region_ratio") or 0.0)
+    regional_loss = float(spatial.get("regional_structure_loss_score") or 0.0)
+    large_contig = float(spatial.get("large_contiguous_foreground_loss") or 0.0) >= 0.5
+
+    # Fold spatial integrity into structure score (do not average away catastrophe)
+    if large_contig:
+        struct_score = min(struct_score, 32.0)
+        triggered.append("large_contiguous_foreground_loss")
+        bads.append("large_contiguous_foreground_loss")
+    elif largest_miss >= 0.12 or regional_loss >= 28.0:
+        struct_score = min(struct_score, max(45.0, struct_score - 0.55 * regional_loss))
+        triggered.append("regional_structure_loss")
+        if largest_miss >= 0.16 and survival < 78.0:
+            warns.append("spatial_product_loss_warn")
+    if survival < 70.0:
+        struct_score = min(struct_score, max(40.0, survival * 0.85))
+
     # --- Corroborated destruction only (never a single wipe heuristic) ---
     # Real destruction needs ≥2 independent integrity signals.
     # Counter-example that must NOT tag destroy: wipe high from bloated scene
@@ -541,6 +574,9 @@ def compute_raw_final_integrity(
     if selective and mid_wipe >= 0.50 and kept_frac < 0.55 and alpha_edge_keep < 0.70:
         signals += 1
         signal_names.append("selective_alpha_edge")
+    if large_contig or (largest_miss >= 0.20 and survival < 75.0):
+        signals += 1
+        signal_names.append("spatial_contiguous_loss")
     stats["destruction_signal_count"] = float(signals)
     stats["destruction_signals"] = ",".join(signal_names)
 
@@ -551,21 +587,35 @@ def compute_raw_final_integrity(
         # Soft only — do not force REVIEW / instant reject
         warns.append("structure_integrity_warn")
         triggered.append("destruction_uncorroborated_demoted")
-        # If other integrity channels are healthy, repair contradicted structure score
+        # Repair contradicted structure ONLY when spatial survival is healthy
+        # (prevents averaging away a destroyed half of the product).
         if (
             edge_cons >= 80.0
             and detail_score >= 80.0
             and overexp_score >= 80.0
-        ) or prior_unreliable:
+            and survival >= 82.0
+            and largest_miss < 0.12
+            and not large_contig
+            and mid_wipe < 0.55
+        ) or (
+            prior_unreliable
+            and survival >= 85.0
+            and largest_miss < 0.10
+            and not large_contig
+        ):
             struct_score = max(struct_score, min(88.0, 100.0 * max(kept_frac, 0.55)))
             triggered.append("structure_score_repaired_contradiction")
             struct_score = _clamp(struct_score)
+        else:
+            triggered.append("structure_repair_blocked_spatial")
 
     if (
         struct_score >= 85
         and detail_score >= 75
         and edge_cons >= 80
         and overexp_score >= 80
+        and survival >= 80.0
+        and not large_contig
     ):
         posits.append("raw_final_integrity_ok")
 
@@ -574,10 +624,11 @@ def compute_raw_final_integrity(
     stats["raw_final_edge_consistency_score"] = edge_cons
     stats["foreground_overexposure_score"] = overexp_score
     stats["raw_final_integrity"] = float(
-        0.35 * struct_score
-        + 0.25 * detail_score
-        + 0.20 * edge_cons
-        + 0.20 * overexp_score
+        0.30 * struct_score
+        + 0.20 * detail_score
+        + 0.15 * edge_cons
+        + 0.15 * overexp_score
+        + 0.20 * min(100.0, survival)
     )
     stats["warn_count"] = float(len(warns))
     stats["bad_count"] = float(len(bads))

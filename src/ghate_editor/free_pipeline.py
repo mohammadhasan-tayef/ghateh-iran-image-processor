@@ -33,7 +33,7 @@ try:
 except Exception:  # noqa: BLE001
     HEIC_OK = False
 
-FREE_PIPELINE_VERSION = "free-v1.14.3"
+FREE_PIPELINE_VERSION = "free-v1.14.4"
 FREE_MODEL_FAST = "u2net"
 FREE_MODEL_QUALITY = "birefnet-general"
 FREE_FALLBACK_MODEL = "u2netp"

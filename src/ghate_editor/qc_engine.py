@@ -208,6 +208,7 @@ def score_object_completeness(
     warns: list[str],
     posits: list[str],
     cfg: QCConfig,
+    raw_final: dict[str, Any] | None = None,
 ) -> tuple[float, list[str]]:
     triggered: list[str] = []
     s = 90.0
@@ -215,6 +216,10 @@ def score_object_completeness(
     ed = _f(structure, "edge_drop")
     mid = _f(structure, "midtone_loss")
     collapsed = _f(structure, "collapsed_regions")
+    rf = raw_final or {}
+    survival = _f(rf, "foreground_survival_score", 100.0)
+    largest_miss = _f(rf, "largest_missing_region_ratio")
+    regional = _f(rf, "regional_structure_loss_score")
 
     s -= _lerp_penalty(sl, cfg.struct_loss_soft, cfg.struct_loss_hard, 42.0)
     if sl >= cfg.struct_loss_soft:
@@ -228,6 +233,19 @@ def score_object_completeness(
     if collapsed >= 3:
         s -= min(18.0, collapsed * 5.0)
         triggered.append("shape_collapse")
+
+    # RAW-aware spatial completeness (surviving regions must not hide missing halves)
+    if survival < 95.0:
+        s -= _lerp_penalty(max(0.0, 88.0 - survival), 0.0, 40.0, 36.0)
+    if largest_miss >= 0.10:
+        s -= min(40.0, largest_miss * 120.0)
+        triggered.append("largest_missing_region")
+    if regional >= 25.0:
+        s -= min(28.0, regional * 0.45)
+        triggered.append("regional_completeness_loss")
+    if "large_contiguous_foreground_loss" in bads:
+        s = min(s, 22.0)
+        triggered.append("spatial_loss_completeness_cap")
 
     if "catastrophic_structure_loss" in bads and sl >= cfg.instant_struct_loss:
         s = min(s, 28.0)
@@ -475,6 +493,12 @@ def destruction_corroborated(
         and (edge_rf < 70.0 or alpha_edge < 0.65 or sl >= 0.28)
     ):
         signals += 1
+    if _f(rf, "large_contiguous_foreground_loss") >= 0.5:
+        signals += 1
+    if _f(rf, "largest_missing_region_ratio") >= 0.18 and _f(
+        rf, "foreground_survival_score", 100.0
+    ) < 78.0:
+        signals += 1
 
     # Explicit pre-confirmed tag from compute_raw_final_integrity
     if _f(rf, "destruction_signal_count") >= 2:
@@ -533,15 +557,34 @@ def sanitize_destruction_and_fragmentation(
             if "structure_integrity_warn" not in warns:
                 warns.append("structure_integrity_warn")
             triggered.append("destruction_false_positive_demoted")
-            # Contradicted wipe zeroing structure while other channels healthy
-            if edge_rf >= 80.0 and detail_p >= 80.0 and overexp >= 80.0:
+            survival = _f(rf, "foreground_survival_score", 100.0)
+            largest_miss = _f(rf, "largest_missing_region_ratio")
+            # Contradicted wipe zeroing structure while other channels + spatial healthy
+            if (
+                edge_rf >= 80.0
+                and detail_p >= 80.0
+                and overexp >= 80.0
+                and survival >= 82.0
+                and largest_miss < 0.12
+                and "large_contiguous_foreground_loss" not in bads
+            ):
                 struct_p = max(struct_p, 72.0)
                 integ = float(
-                    0.35 * struct_p + 0.25 * detail_p + 0.20 * edge_rf + 0.20 * overexp
+                    0.30 * struct_p
+                    + 0.20 * detail_p
+                    + 0.15 * edge_rf
+                    + 0.15 * overexp
+                    + 0.20 * min(100.0, survival)
                 )
                 rf["structure_preservation_score"] = struct_p
                 rf["raw_final_integrity"] = integ
                 triggered.append("structure_score_repaired_fp")
+
+    # Never demote explicit spatial contiguous loss
+    if _f(rf, "large_contiguous_foreground_loss") >= 0.5:
+        if "large_contiguous_foreground_loss" not in bads:
+            bads.append("large_contiguous_foreground_loss")
+        triggered.append("spatial_loss_retained")
 
     return bads, warns, posits, struct_p, integ
 
@@ -718,7 +761,7 @@ def build_qc_report(
     mask_s, t1 = score_mask_confidence(mask_stats, bads, warns, posits, cfg)
     edge_s, t2 = score_edge_integrity(cutout_stats, studio_stats, bads, warns)
     obj_s, t3 = score_object_completeness(
-        structure_stats, mask_stats, bads, warns, posits, cfg
+        structure_stats, mask_stats, bads, warns, posits, cfg, raw_final=rf
     )
     bg_s, t4 = score_background_purity(studio_stats, bads, warns, cfg)
     shadow_s, t4b = score_shadow(studio_stats, cfg)
@@ -821,16 +864,38 @@ def build_qc_report(
         "product_whiteout",
         "detail_destroyed",
         "edge_structure_lost",
+        "large_contiguous_foreground_loss",
     }
     has_destruction = any(t in destruction for t in bads)
     # Only confirmed destruction blocks; uncorroborated tags already demoted
     if has_destruction and not destruction_corroborated(rf, structure_stats, bads):
-        has_destruction = "product_whiteout" in bads or "detail_destroyed" in bads
+        has_destruction = (
+            "product_whiteout" in bads
+            or "detail_destroyed" in bads
+            or "large_contiguous_foreground_loss" in bads
+        )
     pass_bar = cfg.pass_min_after_rescue if after_rescue else cfg.pass_min
 
-    if has_destruction:
-        # Confirmed product destruction → always REVIEW (never PASS)
+    survival = _f(rf, "foreground_survival_score", 100.0)
+    largest_miss = _f(rf, "largest_missing_region_ratio")
+    spatial_block = (
+        "large_contiguous_foreground_loss" in bads
+        or (
+            largest_miss >= 0.18
+            and survival < 78.0
+            and _f(rf, "evidence_wipe_frac") >= 0.12
+        )
+    )
+
+    if spatial_block:
         decision: QCDecision = "review"
+        reason = "Large contiguous product region missing (RAW vs FINAL) — REVIEW"
+        triggered.append("spatial_foreground_loss_review")
+        if "large_contiguous_foreground_loss" not in bads:
+            bads.append("large_contiguous_foreground_loss")
+    elif has_destruction:
+        # Confirmed product destruction → always REVIEW (never PASS)
+        decision = "review"
         reason = "Corroborated product destruction (RAW vs FINAL) — REVIEW"
         triggered.append("integrity_forced_review")
     elif integ < cfg.core_second_pass_min:
@@ -895,10 +960,18 @@ def build_qc_report(
         reason = "Excellent core + RAW↔FINAL integrity — PASS"
         triggered.append("core_quality_pass_override")
 
-    if decision == "pass" and has_destruction:
+    if decision == "pass" and (
+        has_destruction or spatial_block or "large_contiguous_foreground_loss" in bads
+    ):
         decision = "review"
-        reason = "Product destruction tags present — REVIEW"
+        reason = "Product destruction / spatial loss tags present — REVIEW"
         triggered.append("destruction_blocks_pass")
+
+    # Incomplete product: catastrophic structure bad + very low completeness
+    if decision == "pass" and "catastrophic_structure_loss" in bads and obj_s < 40.0:
+        decision = "review"
+        reason = "Severe object incompleteness with structure loss — REVIEW"
+        triggered.append("incomplete_product_review")
 
     result = QCResult(
         filename=filename,
