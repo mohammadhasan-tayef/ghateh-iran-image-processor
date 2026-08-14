@@ -111,7 +111,11 @@ def build_studio_rgba(
         report.exposure_wb = erep
         edited, cpres = apply_with_preservation(rgba, edited, cfg=cfg)
         report.color_preserve = cpres.to_dict()
-        analysis2 = analyze_image(edited.convert("RGB"), mask=edited.split()[-1])
+        # Re-analyze only when exposure/WB actually changed pixels
+        if bool(erep.get("skipped")):
+            analysis2 = analysis
+        else:
+            analysis2 = analyze_image(edited.convert("RGB"), mask=edited.split()[-1])
         edited, hen = adaptive_denoise_sharpen(edited, analysis2, profile=profile, cfg=cfg)
         report.enhance = hen
         rgba = edited

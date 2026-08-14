@@ -114,16 +114,29 @@ def compute_raw_final_integrity(
     studio_rgb: Image.Image | None = None,
     *,
     cfg: QCConfig | None = None,
+    features: Any = None,
 ) -> dict[str, Any]:
     """
     Compare RAW product content to cutout/FINAL independently of processing mask.
 
     Returns stats with scores (0–100) and tags for the QC engine.
+    Optional `features` (RawFeatureCache) avoids recomputing RAW sobel/tex/prior.
     """
     cfg = cfg or get_qc_config()
     src_img = source_rgb if source_rgb.mode == "RGB" else source_rgb.convert("RGB")
     cut_img = rgba_cutout.convert("RGBA")
-    src = np.asarray(src_img, dtype=np.uint8)
+    if features is not None:
+        src = features.rgb
+        lum_s = features.lum
+        edge_s = features.edge
+        tex_s = features.tex
+        prior = features.prior if features.prior is not None else estimate_raw_product_prior(src)
+    else:
+        src = np.asarray(src_img, dtype=np.uint8)
+        lum_s = _luma(src)
+        edge_s = _sobel(lum_s)
+        tex_s = _local_std(lum_s, win=5)
+        prior = estimate_raw_product_prior(src)
     cut = np.asarray(cut_img, dtype=np.uint8)
 
     warns: list[str] = []
@@ -151,19 +164,15 @@ def compute_raw_final_integrity(
         return stats
 
     if cut.shape[:2] != src.shape[:2]:
-        cut_img = cut_img.resize(src_img.size, Image.Resampling.NEAREST)
+        cut_img = cut_img.resize((src.shape[1], src.shape[0]), Image.Resampling.NEAREST)
         cut = np.asarray(cut_img, dtype=np.uint8)
 
     alpha = cut[:, :, 3].astype(np.float32)
     rgb_out = cut[:, :, :3]
-    lum_s = _luma(src)
     lum_o = _luma(rgb_out)
-    edge_s = _sobel(lum_s)
     edge_o = _sobel(lum_o)
-    tex_s = _local_std(lum_s, win=5)
     tex_o = _local_std(lum_o, win=5)
 
-    prior = estimate_raw_product_prior(src)
     prior_n = int(np.count_nonzero(prior))
     stats["raw_prior_pixels"] = float(prior_n)
     stats["raw_prior_frac"] = float(prior.mean()) if prior.size else 0.0

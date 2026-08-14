@@ -98,22 +98,14 @@ def analyze_image(rgb: Image.Image, mask: Image.Image | None = None) -> ImageAna
     sharpness = float(edge[fg].mean() / 40.0) if fg.any() else float(edge.mean() / 40.0)
     sharpness = float(np.clip(sharpness, 0.0, 3.0))
 
-    # Noise: high-frequency residual in relatively flat patches
-    blur = lum.copy()
-    # 3x3 box via cumulative (approx)
-    k = 3
-    pad = k // 2
-    padded = np.pad(lum, pad, mode="edge")
-    # Cheap average
-    from numpy.lib.stride_tricks import sliding_window_view
+    # Noise: high-frequency residual via box filter (same 3x3 mean as sliding window)
+    from scipy import ndimage
 
-    try:
-        win = sliding_window_view(padded, (k, k))
-        local = win.mean(axis=(-1, -2))
-        residual = np.abs(lum - local)
-        noise_level = float(residual[fg].mean() / 255.0) if fg.any() else float(residual.mean() / 255.0)
-    except Exception:
-        noise_level = float(std_luma / 255.0) * 0.15
+    local = ndimage.uniform_filter(lum.astype(np.float32), size=3, mode="nearest")
+    residual = np.abs(lum - local)
+    noise_level = (
+        float(residual[fg].mean() / 255.0) if fg.any() else float(residual.mean() / 255.0)
+    )
 
     bg_lum = float(lum[bg].mean()) if bg.any() else float(lum.mean())
     bg_std = float(lum[bg].std()) if bg.any() else float(lum.std())
@@ -129,7 +121,7 @@ def analyze_image(rgb: Image.Image, mask: Image.Image | None = None) -> ImageAna
 
     mx = arr.max(axis=2)
     mn = arr.min(axis=2)
-    sat = np.where(mx > 1e-3, (mx - mn) / mx, 0.0)
+    sat = np.where(mx > 1e-3, (mx - mn) / np.maximum(mx, 1e-3), 0.0)
     saturation_mean = float(sat[fg].mean()) if fg.any() else float(sat.mean())
 
     return ImageAnalysis(

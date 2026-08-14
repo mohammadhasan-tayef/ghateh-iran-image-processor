@@ -33,7 +33,7 @@ try:
 except Exception:  # noqa: BLE001
     HEIC_OK = False
 
-FREE_PIPELINE_VERSION = "free-v1.14.0"
+FREE_PIPELINE_VERSION = "free-v1.14.1"
 FREE_MODEL_FAST = "u2net"
 FREE_MODEL_QUALITY = "birefnet-general"
 FREE_FALLBACK_MODEL = "u2netp"
@@ -842,6 +842,7 @@ def evaluate_structure_consistency(
     rgba_cutout: Image.Image,
     *,
     scene: dict[str, Any] | None = None,
+    features: Any = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     """
     Source↔output structural consistency inside product support ROI.
@@ -849,14 +850,28 @@ def evaluate_structure_consistency(
     Detects when segmentation erased substantial product structure
     (grey/translucent parts → white) while dark fragments remain.
     Does NOT compare full-canvas background texture.
+    Optional `features` (RawFeatureCache) reuses RAW luma/edge/tex.
     """
     from scipy import ndimage
 
     cfg = GATE_CONFIG
-    src = np.asarray(
-        source_rgb if source_rgb.mode == "RGB" else source_rgb.convert("RGB"),
-        dtype=np.uint8,
-    )
+    if features is not None:
+        src = features.rgb
+        lum_s = features.lum
+        edge = features.edge
+        tex = features.tex
+    else:
+        src = np.asarray(
+            source_rgb if source_rgb.mode == "RGB" else source_rgb.convert("RGB"),
+            dtype=np.uint8,
+        )
+        lum_s = (
+            0.299 * src[:, :, 0].astype(np.float32)
+            + 0.587 * src[:, :, 1].astype(np.float32)
+            + 0.114 * src[:, :, 2].astype(np.float32)
+        )
+        edge = _sobel_mag(lum_s)
+        tex = _local_std(lum_s, win=5)
     cut = np.asarray(rgba_cutout, dtype=np.uint8)
     if cut.ndim != 3 or cut.shape[2] < 4 or cut.shape[:2] != src.shape[:2]:
         if cut.shape[:2] != src.shape[:2] and cut.ndim == 3:
@@ -866,11 +881,6 @@ def evaluate_structure_consistency(
 
     alpha = cut[:, :, 3]
     rgb_out = cut[:, :, :3]
-    lum_s = (
-        0.299 * src[:, :, 0].astype(np.float32)
-        + 0.587 * src[:, :, 1].astype(np.float32)
-        + 0.114 * src[:, :, 2].astype(np.float32)
-    )
     soft = alpha >= cfg.soft_alpha_min
 
     warns: list[str] = []
@@ -905,9 +915,6 @@ def evaluate_structure_consistency(
     roi = np.zeros_like(support)
     roi[y0:y1, x0:x1] = True
     support = support & roi
-
-    edge = _sobel_mag(lum_s)
-    tex = _local_std(lum_s, win=5)
 
     near_white_src = (
         (src[:, :, 0] >= 248) & (src[:, :, 1] >= 248) & (src[:, :, 2] >= 248)
@@ -1926,10 +1933,24 @@ def _run_once(
     qscore = 50.0
     zone_reasons: list[str] = []
     qc_report: dict[str, Any] | None = None
+    reuse_analysis_as_studio = False
+    analysis = None  # type: ignore[assignment]
     try:
+        t_st = time.perf_counter()
+        # Shared RAW features for structure + RAW↔FINAL (compute once)
+        raw_feats = None
+        try:
+            from .qc_features import build_raw_features
+
+            raw_feats = build_raw_features(working, with_prior=True)
+        except Exception:
+            raw_feats = None
         ok_st, reason_st, ststats = evaluate_structure_consistency(
-            working, rgba, scene=scene
+            working, rgba, scene=scene, features=raw_feats
         )
+        timings["qc_structure"] = time.perf_counter() - t_st
+
+        t_comp_a = time.perf_counter()
         if use_studio and studio_profile is not None:
             from .processing import DEFAULT_PROCESSING, compose_white_square
 
@@ -1948,12 +1969,16 @@ def _run_once(
                 gentle_edges=gentle_edges or preserve_alpha or use_roi,
                 conservative_enhance=conservative_enhance or preserve_alpha or use_roi,
             )
+        timings["compose_analysis"] = time.perf_counter() - t_comp_a
+
         try:
+            t_studio_q = time.perf_counter()
             ok_s, reason_s, sstats = evaluate_studio_quality(
                 analysis, scene=scene, cutout_stats=_sanitize_stats(cstats)
             )
+            timings["qc_studio"] = time.perf_counter() - t_studio_q
         finally:
-            # Keep analysis briefly for RAW↔FINAL studio check, then close
+            # Keep analysis for RAW↔FINAL and possibly reuse as final studio
             pass
 
         # Independent RAW vs FINAL integrity (does not trust processing mask alone)
@@ -1961,9 +1986,11 @@ def _run_once(
         try:
             from .qc_raw_final import compute_raw_final_integrity
 
+            t_rf = time.perf_counter()
             rfstats = compute_raw_final_integrity(
-                working, rgba, studio_rgb=analysis, cfg=None
+                working, rgba, studio_rgb=analysis, cfg=None, features=raw_feats
             )
+            timings["qc_raw_final"] = time.perf_counter() - t_rf
         except Exception as rf_exc:  # noqa: BLE001
             rfstats = {
                 "structure_preservation_score": 70.0,
@@ -1976,11 +2003,17 @@ def _run_once(
                 "_posits": [],
                 "_triggered": [f"raw_final_error:{rf_exc}"],
             }
-        try:
-            analysis.close()
-        except Exception:
-            pass
+            timings["qc_raw_final"] = 0.0
+        # If final composite needs no shadow, reuse analysis canvas (identical compose)
+        reuse_analysis_as_studio = not with_shadow
+        if not reuse_analysis_as_studio:
+            try:
+                analysis.close()
+            except Exception:
+                pass
+            analysis = None  # type: ignore[assignment]
 
+        t_cls = time.perf_counter()
         zone, qscore, zone_reasons = classify_quality(
             mstats,
             cstats,
@@ -1989,11 +2022,13 @@ def _run_once(
             raw_final_stats=rfstats,
             after_rescue=after_rescue or use_roi,
         )
+        timings["qc_classify"] = time.perf_counter() - t_cls
         qc_report = (sstats or {}).pop("_qc_report", None)
         meta["raw_final_stats"] = _sanitize_stats(rfstats)
     except Exception as exc:  # noqa: BLE001
         # Quality analysis crashed — keep the cutout; send toward Review
         quality_error = str(exc)
+        reuse_analysis_as_studio = False
         ststats = {
             "warn_count": 1.0,
             "bad_count": 0.0,
@@ -2020,6 +2055,7 @@ def _run_once(
             analysis.close()  # type: ignore[name-defined]
         except Exception:
             pass
+        analysis = None  # type: ignore[assignment]
     timings["gate"] = timings.get("gate", 0.0) + (time.perf_counter() - t0)
 
     meta["mask_stats"] = _sanitize_stats(mstats)
@@ -2082,7 +2118,15 @@ def _run_once(
     # Final presentation composite (shadow is display-only)
     t1 = time.perf_counter()
     try:
-        if use_studio and studio_profile is not None:
+        if reuse_analysis_as_studio and analysis is not None:
+            studio = analysis
+            timings["composite_reused"] = 1.0
+            if meta.get("studio_processing"):
+                meta["studio_processing"]["composition"] = {
+                    "reused_analysis_canvas": True,
+                    "with_shadow": False,
+                }
+        elif use_studio and studio_profile is not None:
             from .processing import DEFAULT_PROCESSING, compose_white_square
 
             studio, cinfo_final = compose_white_square(
