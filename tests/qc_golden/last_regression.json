@@ -1,0 +1,11 @@
+{
+  "version": "qc-v3-raw-final",
+  "good_total": 2,
+  "good_pass": 2,
+  "false_review": 0,
+  "bad_total": 4,
+  "bad_review": 4,
+  "false_pass": 0,
+  "false_second_pass_on_bad": 0,
+  "accuracy": 1.0
+}

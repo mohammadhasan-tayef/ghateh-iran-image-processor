@@ -1,0 +1,14 @@
+fal-client>=0.5.0
+Pillow>=10.0.0
+customtkinter>=5.2.0
+python-dotenv>=1.0.0
+rembg>=2.0.57
+numpy>=1.24.0
+pillow-heif>=0.16.0
+
+# GPU ONNX runtime — pick ONE (do not install both CPU and GPU wheels together):
+# Windows recommended (works with GTX 1650 without full CUDA toolkit):
+onnxruntime-directml>=1.20.0
+# Optional NVIDIA CUDA path (needs CUDA 13 + cuDNN pip wheels or toolkit):
+#   pip uninstall -y onnxruntime onnxruntime-directml
+#   pip install "onnxruntime-gpu[cuda,cudnn]>=1.27.0"

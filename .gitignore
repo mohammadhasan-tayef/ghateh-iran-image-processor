@@ -1,0 +1,17 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ghate_cache.json
+output_*/
+golden/spike_out/*
+!golden/spike_out/.gitkeep
+*.tmp_*
+.DS_Store
+debug/
+debug_qc/
+tmp_test/
+*.log
+.idea/
+.vscode/
