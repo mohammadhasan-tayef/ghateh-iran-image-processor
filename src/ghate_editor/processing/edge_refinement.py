@@ -127,6 +127,72 @@ def decontaminate_halo(
     return img, {"decontam_px": touched, "strength": strength}
 
 
+def uncomposite_edge_band(
+    rgba: Image.Image,
+    working_rgb: Image.Image,
+    *,
+    cfg: ProcessingConfig | None = None,
+) -> tuple[Image.Image, dict[str, Any]]:
+    """
+    Edge-only color unmix against local background estimated from working RGB.
+
+    Interior solid pixels stay the original working RGB. Partial-alpha fringe
+    is unpremultiplied so gray floor / halo does not composite onto white.
+    """
+    from .alpha_matting import uncomposite_edge_rgb
+    from .morphology import binary_dilate
+
+    cfg = cfg or ProcessingConfig()
+    rgba = rgba.convert("RGBA")
+    src = working_rgb.convert("RGB")
+    if src.size != rgba.size:
+        src = src.resize(rgba.size, Image.Resampling.LANCZOS)
+
+    arr = np.asarray(rgba, dtype=np.uint8)
+    rgb_keep = np.asarray(src, dtype=np.uint8)
+    alpha = arr[:, :, 3].astype(np.float32) / 255.0
+    solid = alpha >= 0.78
+    soft = (alpha >= 0.04) & (alpha < 0.92)
+    if not soft.any():
+        # Interior RGB locked to original
+        out = np.dstack([rgb_keep, arr[:, :, 3]])
+        return Image.fromarray(out, mode="RGBA"), {"uncomposite_px": 0}
+
+    band = binary_dilate(solid, radius=max(1, cfg.halo_band_px)) & soft
+    src_f = rgb_keep.astype(np.float32)
+    # Per-pixel local background from working RGB just outside the product
+    exterior = binary_dilate(alpha >= 0.08, radius=cfg.halo_band_px + 3) & (alpha < 0.08)
+    from .alpha_matting import _nearest_color
+
+    if exterior.any():
+        bg_map, _ = _nearest_color(src_f, exterior)
+        bg_mean = src_f[exterior].mean(axis=0)
+    else:
+        h, w = alpha.shape
+        m = max(4, int(0.04 * min(h, w)))
+        border = np.zeros_like(alpha, dtype=bool)
+        border[:m, :] = True
+        border[-m:, :] = True
+        border[:, :m] = True
+        border[:, -m:] = True
+        bg_mean = src_f[border].mean(axis=0) if border.any() else np.array(
+            [255.0, 255.0, 255.0], dtype=np.float32
+        )
+        bg_map = np.broadcast_to(bg_mean.reshape(1, 1, 3), src_f.shape).copy()
+
+    recovered = uncomposite_edge_rgb(src_f, alpha, bg_map, lo=0.04, hi=0.92)
+    mixed = rgb_keep.copy()
+    # Apply recovered RGB only in the narrow edge band
+    mixed[band] = recovered[band]
+    # Interior: original RGB
+    mixed[solid] = rgb_keep[solid]
+    out = np.dstack([mixed, arr[:, :, 3]])
+    return Image.fromarray(out, mode="RGBA"), {
+        "uncomposite_px": int(band.sum()),
+        "bg_color": [float(x) for x in np.asarray(bg_mean).reshape(-1)[:3].tolist()],
+    }
+
+
 def strip_large_shadows(
     rgba: Image.Image,
     *,

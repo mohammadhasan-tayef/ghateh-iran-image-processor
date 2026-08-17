@@ -1,0 +1,14 @@
+# Isolated A/B extraction harness ONLY — not used by the production app.
+# Install into a SEPARATE venv so CPU onnxruntime never replaces DirectML:
+#
+#   python -m venv .venv-withoutbg
+#   .venv-withoutbg\Scripts\pip install -r requirements-ab-extraction.txt
+#
+# Then run the harness with the PRODUCTION interpreter:
+#   .venv\Scripts\python.exe scripts/ab_extraction.py
+#
+# Do NOT pip-install withoutbg into .venv (it pulls onnxruntime CPU and
+# can break onnxruntime-directml used by rembg).
+
+withoutbg>=1.1.0
+pillow>=10.0.0

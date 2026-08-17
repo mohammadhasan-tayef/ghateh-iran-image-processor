@@ -1,0 +1,19 @@
+# Default A/B extraction cases (resolved from --raw-dir by IMG_#### stem).
+# category	stem	notes
+black_vacuum_brushes	IMG_4048	black vacuum floor nozzle, glossy + matte, contact shadow
+black_white_mixed	IMG_4055	black + light-gray mixed plastics, residual-shadow risk
+metallic_translucent	IMG_4052	historically catastrophic missing pixels / metallic-like
+thin_bristles	IMG_4070	orange underside + thin bristles + internal geometry
+textured_black	IMG_4080	textured black + white print + neck joints
+internal_holes	IMG_4105	hollow neck opening + switch gap
+mesh_filter_bristles	IMG_4106	underside bristles + red lint strips / mesh-like
+low_contrast_black	IMG_4129	black on off-white original, halo-prone
+close_crop_black	IMG_4171	tight crop / edge-touching frame
+shadow_heavy	IMG_4174	follow-up frame of black plastic, shadow/halo
+cluttered_bg_hand	IMG_4300	box held in warehouse clutter / extra humans / shelves
+transparent_plastic	IMG_4500	yellow dust bag + clear sleeve + low-contrast plastic edge
+white_gears_holes	IMG_5500	white-on-white gears, fine teeth, internal holes, two objects
+metallic_cast_holes	IMG_6500	matte metal housing, mounting holes, attached shadow
+black_vacuum	IMG_4042	early vacuum family
+shadow_on_packaging	IMG_4064	black Samsung nozzle on white box, hard attached shadow
+thin_white_fins	IMG_4069	Philips nozzle, white comb fins, mixed gray/white, background clutter

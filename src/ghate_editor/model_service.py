@@ -18,6 +18,8 @@ for _k, _v in (
 _lock = threading.Lock()
 _sessions: dict[str, Any] = {}
 _device_info: dict[str, Any] | None = None
+_withoutbg_model: Any = None
+_withoutbg_load_sec: float | None = None
 
 # Heavy models — on 4GB VRAM keep at most one heavyweight session resident
 _HEAVY_MODELS = frozenset({"birefnet-general", "birefnet-general-lite", "sam"})
@@ -200,6 +202,56 @@ def warmup(model_name: str = "u2net") -> dict[str, Any]:
     info = detect_device()
     get_session(model_name)
     return {**info, "model": model_name, "loaded": True}
+
+
+def get_withoutbg_model():
+    """Lazy singleton: WithoutBG.open_weights() once per process. CPU ONNX only."""
+    global _withoutbg_model, _withoutbg_load_sec
+    if _withoutbg_model is not None:
+        return _withoutbg_model
+    with _lock:
+        if _withoutbg_model is not None:
+            return _withoutbg_model
+        import time
+
+        t0 = time.perf_counter()
+        try:
+            from withoutbg import WithoutBG
+        except ImportError as exc:
+            raise RuntimeError(
+                "withoutbg is not installed in this venv. "
+                "Install isolated (do NOT pip-install CPU onnxruntime):\n"
+                "  pip install --no-deps withoutbg\n"
+                "  pip install huggingface_hub"
+            ) from exc
+        model = WithoutBG.open_weights()
+        if hasattr(model, "preload"):
+            model.preload()
+        _withoutbg_load_sec = time.perf_counter() - t0
+        _withoutbg_model = model
+        return model
+
+
+def withoutbg_load_sec() -> float | None:
+    return _withoutbg_load_sec
+
+
+def warmup_withoutbg() -> dict[str, Any]:
+    info = detect_device()
+    get_withoutbg_model()
+    return {
+        **info,
+        "model": "withoutbg-open-weights",
+        "loaded": True,
+        "model_load_sec": _withoutbg_load_sec,
+        "providers": ["CPUExecutionProvider"],
+    }
+
+
+def release_withoutbg() -> None:
+    global _withoutbg_model
+    with _lock:
+        _withoutbg_model = None
 
 
 def reset_session() -> None:

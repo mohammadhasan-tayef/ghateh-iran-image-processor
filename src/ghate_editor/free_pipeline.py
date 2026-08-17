@@ -33,7 +33,7 @@ try:
 except Exception:  # noqa: BLE001
     HEIC_OK = False
 
-FREE_PIPELINE_VERSION = "free-v1.14.5"
+FREE_PIPELINE_VERSION = "free-v1.16.0"
 FREE_MODEL_FAST = "u2net"
 FREE_MODEL_QUALITY = "birefnet-general"
 FREE_FALLBACK_MODEL = "u2netp"
@@ -1496,9 +1496,10 @@ def compose_studio_square(
     *,
     size: int = 2000,
     product_fill: float = 0.84,
-    with_shadow: bool = True,
+    with_shadow: bool = False,
     gentle_edges: bool = False,
     conservative_enhance: bool = False,
+    enhance: bool = False,
 ) -> Image.Image:
     rgba = rgba.convert("RGBA")
     rgba = clean_cutout_edges(rgba, gentle=gentle_edges)
@@ -1512,7 +1513,8 @@ def compose_studio_square(
     new_w = max(1, int(w * scale))
     new_h = max(1, int(h * scale))
     product = cropped.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    product = enhance_product(product, conservative=conservative_enhance)
+    if enhance:
+        product = enhance_product(product, conservative=conservative_enhance)
 
     pad = 56 if with_shadow else 0
     layer_w = new_w + pad * 2
@@ -1708,6 +1710,11 @@ def _run_once(
     use_roi: bool = False,
     guide_mask: Image.Image | None = None,
     after_rescue: bool = False,
+    extraction_alpha: Image.Image | None = None,
+    extraction_meta: dict[str, Any] | None = None,
+    studio_skip_matting: bool = False,
+    studio_skip_mask_refine: bool = False,
+    locked_alpha=None,
 ) -> tuple[Image.Image | None, dict[str, Any], dict[str, float], bool, list[str]]:
     """
     Segment → mask/cutout/structure gates (product ROI, no shadow) → classify →
@@ -1721,7 +1728,41 @@ def _run_once(
     timings["preprocess"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    if use_roi:
+    extraction_meta = dict(extraction_meta or {})
+    if extraction_alpha is not None:
+        from .extraction.lock import lock_alpha
+
+        if locked_alpha is None:
+            locked_alpha = lock_alpha(
+                extraction_alpha,
+                source_engine=str(extraction_meta.get("selected_engine") or model_name),
+            )
+        mask = locked_alpha.image()
+        # FINAL_ALPHA must already share the working canvas. Never resample it.
+        iw, ih = mask.size
+        timings["infer"] = time.perf_counter() - t0
+        meta["infer_size"] = f"{iw}x{ih}"
+        meta["model"] = extraction_meta.get("selected_engine") or model_name
+        meta["use_roi"] = False
+        meta["alpha_lock"] = locked_alpha.to_meta()
+        meta["extraction"] = {
+            k: extraction_meta.get(k)
+            for k in (
+                "pipeline",
+                "primary_engine",
+                "rescue_engine",
+                "selected_engine",
+                "primary_gate",
+                "rescue_ran",
+                "candidate_select",
+                "primary_ms",
+                "rescue_ms",
+                "total_extract_ms",
+                "canvas_size",
+            )
+        }
+        meta["seg_confidence"] = extraction_meta.get("metrics", {}).get("score")
+    elif use_roi:
         mask, iw, ih, roi_meta = segment_mask_roi(
             working,
             guide_mask,
@@ -1733,6 +1774,10 @@ def _run_once(
         meta.update(roi_meta)
         # Conservative alpha on strong rescue
         mask = refine_rescue_alpha(mask)
+        timings["infer"] = time.perf_counter() - t0
+        meta["infer_size"] = f"{iw}x{ih}"
+        meta["model"] = model_name
+        meta["use_roi"] = True
     else:
         mask, iw, ih = segment_mask(
             working,
@@ -1743,66 +1788,67 @@ def _run_once(
         )
         if preserve_alpha:
             mask = fortify_alpha(mask, strong=True)
-    timings["infer"] = time.perf_counter() - t0
-    meta["infer_size"] = f"{iw}x{ih}"
-    meta["model"] = model_name
-    meta["use_roi"] = bool(use_roi)
+        timings["infer"] = time.perf_counter() - t0
+        meta["infer_size"] = f"{iw}x{ih}"
+        meta["model"] = model_name
+        meta["use_roi"] = bool(use_roi)
 
-    # Optional second segmentation when primary confidence is weak (non-ROI)
-    try:
-        from .processing import (
-            DEFAULT_PROCESSING,
-            score_mask_confidence,
-            select_or_ensemble_masks,
-        )
+    # Optional second segmentation when primary confidence is weak (legacy rembg only)
+    if extraction_alpha is None:
+        try:
+            from .processing import (
+                DEFAULT_PROCESSING,
+                score_mask_confidence,
+                select_or_ensemble_masks,
+            )
 
-        seg_a = score_mask_confidence(mask, model_name=model_name, rgb=working)
-        meta["seg_confidence"] = seg_a.confidence
-        meta["seg_warnings"] = list(seg_a.warnings)
-        cfg_p = DEFAULT_PROCESSING
-        if (
-            not use_roi
-            and model_name == FREE_MODEL_FAST
-            and seg_a.confidence < cfg_p.conf_second_model
-            and seg_a.confidence >= 0.25
-        ):
-            t1 = time.perf_counter()
-            try:
-                mask_b, iw2, ih2 = segment_mask(
-                    working,
-                    max_side=max(infer_max_side, INFER_MAX_SIDE_QUALITY),
-                    model_name=FREE_MODEL_QUALITY,
-                    infer_boost=infer_boost or bool(scene.get("difficult")),
-                    scene=scene,
-                )
-                seg_b = score_mask_confidence(
-                    mask_b, model_name=FREE_MODEL_QUALITY, rgb=working
-                )
-                chosen = select_or_ensemble_masks(seg_a, seg_b, cfg=cfg_p)
-                if chosen.mask is not mask:
-                    try:
-                        mask.close()
-                    except Exception:
-                        pass
-                if chosen.mask is not mask_b:
-                    try:
-                        mask_b.close()
-                    except Exception:
-                        pass
-                mask = chosen.mask
-                meta["model"] = chosen.model_name
-                meta["second_model_used"] = True
-                meta["seg_confidence"] = chosen.confidence
-                meta["seg_iou"] = (chosen.metrics or {}).get("iou")
-                meta["infer_size"] = f"{iw2}x{ih2}"
-                timings["fallback_infer"] = timings.get("fallback_infer", 0.0) + (
-                    time.perf_counter() - t1
-                )
-            except Exception as exc:  # noqa: BLE001
-                meta["second_model_error"] = str(exc)
-                release_memory(empty_cuda_cache=_is_oom(exc))
-    except Exception:
-        pass
+            seg_a = score_mask_confidence(mask, model_name=model_name, rgb=working)
+            meta["seg_confidence"] = seg_a.confidence
+            meta["seg_warnings"] = list(seg_a.warnings)
+            cfg_p = DEFAULT_PROCESSING
+            if (
+                not use_roi
+                and model_name == FREE_MODEL_FAST
+                and seg_a.confidence < cfg_p.conf_second_model
+                and seg_a.confidence >= 0.25
+            ):
+                t1 = time.perf_counter()
+                try:
+                    mask_b, iw2, ih2 = segment_mask(
+                        working,
+                        max_side=max(infer_max_side, INFER_MAX_SIDE_QUALITY),
+                        model_name=FREE_MODEL_QUALITY,
+                        infer_boost=infer_boost or bool(scene.get("difficult")),
+                        scene=scene,
+                    )
+                    seg_b = score_mask_confidence(
+                        mask_b, model_name=FREE_MODEL_QUALITY, rgb=working
+                    )
+                    chosen = select_or_ensemble_masks(seg_a, seg_b, cfg=cfg_p)
+                    if chosen.mask is not mask:
+                        try:
+                            mask.close()
+                        except Exception:
+                            pass
+                    if chosen.mask is not mask_b:
+                        try:
+                            mask_b.close()
+                        except Exception:
+                            pass
+                    mask = chosen.mask
+                    meta["model"] = chosen.model_name
+                    meta["second_model_used"] = True
+                    meta["seg_confidence"] = chosen.confidence
+                    meta["seg_iou"] = (chosen.metrics or {}).get("iou")
+                    meta["infer_size"] = f"{iw2}x{ih2}"
+                    timings["fallback_infer"] = timings.get("fallback_infer", 0.0) + (
+                        time.perf_counter() - t1
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    meta["second_model_error"] = str(exc)
+                    release_memory(empty_cuda_cache=_is_oom(exc))
+        except Exception:
+            pass
 
     # Keep a lightweight guide for subsequent ROI rescue (downscale)
     try:
@@ -1859,13 +1905,19 @@ def _run_once(
         try:
             from .processing import DEFAULT_PROCESSING, build_studio_rgba
 
+            scene_studio = dict(scene or {})
+            if extraction_meta.get("primary_gate"):
+                scene_studio["primary_gate"] = extraction_meta.get("primary_gate")
             rgba, studio_profile, studio_rep, _refined = build_studio_rgba(
                 working,
                 mask,
-                scene=scene,
+                scene=scene_studio,
                 model_name=model_name,
                 cfg=DEFAULT_PROCESSING,
-                skip_color=False,
+                skip_color=None,
+                skip_matting=studio_skip_matting or locked_alpha is not None,
+                skip_mask_refine=studio_skip_mask_refine or locked_alpha is not None,
+                locked_alpha=locked_alpha,
             )
             studio_report_dict = studio_rep.to_dict()
             meta["studio_processing"] = studio_report_dict
@@ -1963,6 +2015,7 @@ def _run_once(
                 with_shadow=False,
                 profile=studio_profile,
                 cfg=DEFAULT_PROCESSING,
+                locked_alpha=locked_alpha,
             )
         else:
             analysis = compose_studio_square(
@@ -2167,6 +2220,7 @@ def _run_once(
                 with_shadow=with_shadow,
                 profile=studio_profile,
                 cfg=DEFAULT_PROCESSING,
+                locked_alpha=locked_alpha,
             )
             if meta.get("studio_processing"):
                 meta["studio_processing"]["composition"] = cinfo_final
@@ -2200,13 +2254,54 @@ def _run_once(
                 pass
             raise RuntimeError(f"compose_failed:{exc2}") from exc2
     timings["composite"] = time.perf_counter() - t1
+
+    dump_lock = os.environ.get("GHATE_ALPHA_LOCK_DEBUG", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    dump_debug = os.environ.get("GHATE_DEBUG", "").strip().lower() in {"1", "true", "yes"}
+    if locked_alpha is not None and dump_lock:
+        try:
+            from .extraction.debug import save_alpha_lock_debug
+            from .extraction.zones import product_zones
+
+            stem = str(
+                extraction_meta.get("src_stem")
+                or meta.get("model")
+                or "frame"
+            )
+            dbg = Path(
+                os.environ.get("GHATE_ALPHA_LOCK_DEBUG_DIR", "tests/ab_alpha_lock")
+            )
+            zones = product_zones(locked_alpha, canvas_size=int(size))
+            save_alpha_lock_debug(
+                dbg / stem,
+                original=working,
+                locked=locked_alpha,
+                product_rgba=rgba,
+                white_composite=studio,
+                final_2000=studio,
+                zones=zones,
+                extra={
+                    "qc_decision": meta.get("qc_decision"),
+                    "model": meta.get("model"),
+                    "extraction": meta.get("extraction"),
+                    "alpha_lock": locked_alpha.to_meta(),
+                    "timings": timings,
+                },
+            )
+            meta["alpha_lock_debug_dir"] = str(dbg / stem)
+        except Exception as dump_exc:  # noqa: BLE001
+            meta["alpha_lock_debug_error"] = f"{type(dump_exc).__name__}: {dump_exc}"
+
     try:
         rgba.close()
     except Exception:
         pass
 
     # Optional debug dump
-    if os.environ.get("GHATE_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+    if dump_debug:
         try:
             from .processing.debug_io import save_debug_bundle
 
@@ -2267,7 +2362,7 @@ def process_free_file(
     dest: Path | str,
     *,
     size: int = 2000,
-    with_shadow: bool = True,
+    with_shadow: bool = False,
     quality: int = 90,
     model_name: str = FREE_MODEL_FAST,
     infer_max_side: int | None = None,
@@ -2280,6 +2375,7 @@ def process_free_file(
     scene: dict[str, Any] | None = None,
     perf_log: list[str] | None = None,
     status_log: list[str] | None = None,
+    extraction_pipeline: str | None = None,
 ) -> dict[str, Any]:
     """
     Process one image (streaming-friendly).
@@ -2489,6 +2585,8 @@ def process_free_file(
             or review_meta.get("raw_final_stats"),
             "qc_diagnostics": meta.get("qc_diagnostics")
             or review_meta.get("qc_diagnostics"),
+            "extraction": meta.get("extraction") or review_meta.get("extraction"),
+            "extraction_pipeline": meta.get("extraction_pipeline"),
             "meta": {
                 "qc_decision": meta.get("qc_decision") or review_meta.get("qc_decision"),
                 "quality_score": meta.get("quality_score")
@@ -2520,7 +2618,67 @@ def process_free_file(
     try:
         attempts: list[dict[str, Any]] = []
         difficult = bool(scene.get("difficult"))
-        if free_mode == "quality":
+        from .extraction.pipeline import resolve_extraction_pipeline, run_adaptive_extraction
+        from .extraction.types import ImageContext
+        from .processing.config import DEFAULT_PROCESSING
+
+        pipe = resolve_extraction_pipeline(extraction_pipeline)
+        meta["extraction_pipeline"] = pipe
+        adaptive_ext = None
+        if pipe == "adaptive":
+            try:
+                ctx = ImageContext(
+                    working_rgb=working, scene=scene or {}, src_path=src_path
+                )
+                ctx.extraction_meta["src_stem"] = Path(src_path).stem
+                adaptive_ext = run_adaptive_extraction(
+                    ctx,
+                    free_mode=free_mode,
+                    primary_engine=DEFAULT_PROCESSING.primary_engine,
+                    rescue_engine=DEFAULT_PROCESSING.rescue_engine,
+                )
+                em = adaptive_ext.metadata or {}
+                em["src_stem"] = Path(src_path).stem
+                adaptive_ext.metadata = em
+                timings_all["infer"] = float(em.get("primary_ms") or 0.0) / 1000.0
+                timings_all["fallback_infer"] = float(em.get("rescue_ms") or 0.0) / 1000.0
+                meta["extraction"] = {
+                    k: em.get(k)
+                    for k in (
+                        "pipeline",
+                        "selected_engine",
+                        "primary_gate",
+                        "rescue_ran",
+                        "candidate_select",
+                        "primary_ms",
+                        "rescue_ms",
+                    )
+                }
+            except Exception as exc:  # noqa: BLE001
+                meta["adaptive_extract_error"] = f"{type(exc).__name__}: {exc}"
+                pipe = "legacy"
+                meta["extraction_pipeline"] = "legacy_fallback"
+
+        if pipe == "adaptive" and adaptive_ext is not None and adaptive_ext.alpha is not None:
+            eng = adaptive_ext.engine_name
+            attempts.append(
+                {
+                    "label": "ADAPTIVE",
+                    "model": eng,
+                    "side": infer_max_side or INFER_MAX_SIDE_FAST,
+                    "boost": False,
+                    "gentle": True,
+                    "conservative": True,
+                    "preserve_alpha": False,
+                    "use_roi": False,
+                    "extraction_alpha": adaptive_ext.alpha,
+                    "extraction_meta": adaptive_ext.metadata,
+                    "studio_skip_matting": True,
+                    "studio_skip_mask_refine": True,
+                    "locked_alpha": adaptive_ext.locked_alpha,
+                }
+            )
+        elif free_mode == "quality":
             attempts.append(
                 {
                     "label": "QUALITY",
@@ -2651,6 +2809,11 @@ def process_free_file(
                     use_roi=bool(att.get("use_roi", False)),
                     guide_mask=guide_mask,
                     after_rescue=is_rescue,
+                    extraction_alpha=att.get("extraction_alpha"),
+                    extraction_meta=att.get("extraction_meta"),
+                    studio_skip_matting=bool(att.get("studio_skip_matting", False)),
+                    studio_skip_mask_refine=bool(att.get("studio_skip_mask_refine", False)),
+                    locked_alpha=att.get("locked_alpha"),
                 )
                 if run_meta.get("quality_check_error"):
                     quality_check_errored = True
@@ -2901,6 +3064,8 @@ def process_free_file(
                     "quality_score": meta.get("quality_score"),
                     "raw_final_stats": meta.get("raw_final_stats"),
                     "qc_diagnostics": meta.get("qc_diagnostics"),
+                    "extraction": meta.get("extraction"),
+                    "extraction_pipeline": meta.get("extraction_pipeline"),
                     "meta": {
                         k: v
                         for k, v in meta.items()
@@ -2991,14 +3156,22 @@ def process_free_job(payload: dict) -> dict:
     mode = payload.get("free_mode", "adaptive")
     model = payload.get("model_name", FREE_MODEL_FAST)
     try:
-        warmup(model if mode != "adaptive" else FREE_MODEL_FAST)
+        from .extraction.pipeline import resolve_extraction_pipeline
+        from .model_service import warmup_withoutbg
+
+        pipe = resolve_extraction_pipeline(payload.get("extraction_pipeline"))
+        if pipe == "adaptive":
+            warmup_withoutbg()
+        else:
+            warmup(model if mode != "adaptive" else FREE_MODEL_FAST)
         result = process_free_file(
             payload["src"],
             payload["dest"],
             size=payload.get("size", 2000),
-            with_shadow=payload.get("with_shadow", True),
+            with_shadow=payload.get("with_shadow", False),
             model_name=model,
             free_mode=mode,  # type: ignore[arg-type]
+            extraction_pipeline=pipe,
             review_dir=payload.get("review_dir"),
             review_id=payload.get("review_id"),
             perf_log=perf_lines,

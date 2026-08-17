@@ -31,6 +31,14 @@ class ProcessingConfig:
     decontam_strength_white: float = 0.35
     edge_gradient_agree_min: float = 0.35
 
+    # Alpha matting (fidelity extraction)
+    fidelity_extraction: bool = True
+    use_alpha_matting: bool = True
+    matting_fg_erode: int = 1
+    matting_bg_dilate: int = 3
+    matting_max_side: int = 1280
+    skip_color_by_default: bool = True  # preserve original interior RGB
+
     # Color / exposure
     max_exposure_gain: float = 1.18
     max_exposure_cut: float = 0.92
@@ -55,14 +63,21 @@ class ProcessingConfig:
     # Shadow cleanup
     shadow_luma_max: float = 55.0
     shadow_sat_max: float = 28.0
-    contact_shadow_opacity: float = 0.18
+    contact_shadow_opacity: float = 0.12  # only used when user opts in
 
     # Debug / reporting
     debug_enabled: bool = False
     write_processing_report: bool = True
 
-    # Feature flag: use new studio post-process (mask/edge/color/compose)
+    # Feature flags
     use_studio_engine: bool = True
+    extraction_pipeline: str = "adaptive"  # adaptive | legacy
+    primary_engine: str = "withoutbg"
+    rescue_engine: str = "birefnet"
+    enable_synthetic_shadow: bool = False
+    enable_product_enhancer: bool = False
+    edge_alpha_lo: float = 0.02
+    edge_alpha_hi: float = 0.98
 
 
 DEFAULT_PROCESSING = ProcessingConfig()

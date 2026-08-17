@@ -66,9 +66,10 @@ class BatchConfig:
     skip_existing: bool = True
     seed: int | None = None
     engine: Engine = "free"
-    with_shadow: bool = True
+    with_shadow: bool = False
     free_quality: bool = False  # legacy → maps to free_mode quality
     free_mode: FreeMode = "adaptive"  # recommended default
+    extraction_pipeline: str = "adaptive"  # adaptive | legacy
     # Process pool: only for CPU free path (UI). GPU uses in-process singleton.
     free_use_process: bool | None = None  # None = auto
 
@@ -166,11 +167,19 @@ def build_timing_stats(state: BatchState) -> dict:
     }
 
 
-def pipeline_tag(engine: Engine, free_quality: bool = False, free_mode: str | None = None) -> str:
+def pipeline_tag(
+    engine: Engine,
+    free_quality: bool = False,
+    free_mode: str | None = None,
+    extraction_pipeline: str | None = None,
+) -> str:
     if engine == "free":
+        from .extraction.pipeline import resolve_extraction_pipeline
+
         mode = free_mode or ("quality" if free_quality else "adaptive")
         model = FREE_MODEL_QUALITY if mode == "quality" else FREE_MODEL_FAST
-        return f"free:{FREE_PIPELINE_VERSION}:{mode}:{model}"
+        pipe = resolve_extraction_pipeline(extraction_pipeline)
+        return f"free:{FREE_PIPELINE_VERSION}:{mode}:{pipe}:{model}"
     return f"pro:{PROMPT_VERSION}"
 
 
@@ -179,11 +188,12 @@ def file_fingerprint(
     engine: Engine,
     free_quality: bool = False,
     free_mode: str | None = None,
+    extraction_pipeline: str | None = None,
 ) -> str:
     h = hashlib.sha256()
     stat = path.stat()
     h.update(
-        f"{stat.st_size}:{stat.st_mtime_ns}:{pipeline_tag(engine, free_quality, free_mode)}".encode()
+        f"{stat.st_size}:{stat.st_mtime_ns}:{pipeline_tag(engine, free_quality, free_mode, extraction_pipeline)}".encode()
     )
     with path.open("rb") as f:
         h.update(f.read(65536))
@@ -536,7 +546,7 @@ def process_one_free_thread(
     out_name = f"{rid}.jpg"
     dest = approved_dir(cfg.output_dir) / out_name
     mode = _resolve_free_mode(cfg)
-    fp = file_fingerprint(src, "free", cfg.free_quality, mode)
+    fp = file_fingerprint(src, "free", cfg.free_quality, mode, cfg.extraction_pipeline)
     cache_key = f"free:{normalize_source_path(src)}"
 
     skip, skip_msg = _already_done(
@@ -558,6 +568,7 @@ def process_one_free_thread(
         with_shadow=cfg.with_shadow,
         model_name=model,
         free_mode=mode,
+        extraction_pipeline=cfg.extraction_pipeline,
         review_dir=review_dir(cfg.output_dir),
         review_id=rid,
         known_review_ids=state.known_review_ids,
@@ -833,11 +844,24 @@ def _run_free_sequential(cfg, state, images, cache, model, _log, _finish_one) ->
     """Streaming: bounded decode prefetch overlaps with one GPU infer worker."""
     from queue import Empty, Queue
 
-    from .model_service import warmup
+    from .extraction.pipeline import resolve_extraction_pipeline
+    from .model_service import warmup, warmup_withoutbg
 
     mode = _resolve_free_mode(cfg)
-    _log(f"Free engine: mode={mode} · streaming decode+infer (1 GPU worker)...")
-    info = warmup(FREE_MODEL_FAST if mode != "quality" else FREE_MODEL_QUALITY)
+    pipe = resolve_extraction_pipeline(cfg.extraction_pipeline)
+    _log(
+        f"Free engine: mode={mode} · extraction={pipe} · "
+        "streaming decode+infer (1 GPU worker)..."
+    )
+    if pipe == "adaptive":
+        info = warmup_withoutbg()
+        _log(
+            f"Primary: withoutBG Open Weights (CPU, loaded once "
+            f"{info.get('model_load_sec') or '?'}s). "
+            "BiRefNet GPU rescue only when the cheap gate is uncertain/invalid."
+        )
+    else:
+        info = warmup(FREE_MODEL_FAST if mode != "quality" else FREE_MODEL_QUALITY)
     _log(
         f"CUDA available: {info.get('cuda_available')} · "
         f"Device: {info.get('device')} · "
@@ -847,7 +871,12 @@ def _run_free_sequential(cfg, state, images, cache, model, _log, _finish_one) ->
     )
     if info.get("warning"):
         _log(info["warning"])
-    if mode == "adaptive":
+    if pipe == "adaptive":
+        _log(
+            "Adaptive extraction: withoutBG primary (CPU) → cheap gate → "
+            "conditional BiRefNet rescue. QC unchanged. Synthetic shadow off."
+        )
+    elif mode == "adaptive":
         _log(
             "Adaptive: FAST -> ROI gate -> STRONG rescue if uncertain/bad -> "
             "Approve on high confidence; Review if still poor (shadow excluded from gate)"
@@ -860,7 +889,7 @@ def _run_free_sequential(cfg, state, images, cache, model, _log, _finish_one) ->
     for src in images:
         if state.stop_event.is_set():
             break
-        fp = file_fingerprint(src, "free", cfg.free_quality, mode)
+        fp = file_fingerprint(src, "free", cfg.free_quality, mode, cfg.extraction_pipeline)
         cache_key = f"free:{normalize_source_path(src)}"
         rid = make_stable_id(src)
         skip, skip_msg = _already_done(
@@ -993,7 +1022,7 @@ def _run_free_process_pool(cfg, state, images, cache, model, _log, _finish_one) 
         rid = make_stable_id(src)
         out_name = f"{rid}.jpg"
         dest = approved_dir(cfg.output_dir) / out_name
-        fp = file_fingerprint(src, "free", cfg.free_quality, mode)
+        fp = file_fingerprint(src, "free", cfg.free_quality, mode, cfg.extraction_pipeline)
         cache_key = f"free:{normalize_source_path(src)}"
         skip, skip_msg = _already_done(
             cfg, src, cache, fp, cache_key, done_ids=done_ids, stable_id=rid

@@ -307,10 +307,10 @@ class GhateApp(ctk.CTk):
             justify="left",
         )
         self.workers_hint.pack(anchor="w", padx=12, pady=(0, 4))
-        self.shadow_var = tk.BooleanVar(value=True)
+        self.shadow_var = tk.BooleanVar(value=False)
         self.shadow_chk = ctk.CTkCheckBox(
             self.settings,
-            text="Soft contact shadow",
+            text="Optional contact shadow (off by default)",
             variable=self.shadow_var,
             fg_color=PURPLE,
             hover_color=PURPLE_HOVER,

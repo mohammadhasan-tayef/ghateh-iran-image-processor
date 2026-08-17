@@ -166,6 +166,45 @@ def test_exposure_skips_good_image():
     assert out.size == rgba.size
 
 
+def test_matting_trimap_and_interior_rgb():
+    """Matting must keep interior RGB identical to source."""
+    from ghate_editor.processing.alpha_matting import build_trimap, refine_alpha_matting
+
+    rgb, mask = _make_product(fg_color=(48, 52, 60), bg_color=(200, 200, 205))
+    tri = build_trimap(mask)
+    assert set(np.unique(tri).tolist()) <= {0, 128, 255}
+    rgba, profile, report, _ = build_studio_rgba(rgb, mask, model_name="test")
+    src = np.asarray(rgb, dtype=np.uint8)
+    out = np.asarray(rgba.convert("RGBA"), dtype=np.uint8)
+    a = out[:, :, 3]
+    core = a >= 220
+    if core.any():
+        d = np.abs(out[core][:, :3].astype(np.int16) - src[core].astype(np.int16)).mean()
+        assert d < 1.0, d
+    canvas, _ = compose_white_square(rgba, size=600, with_shadow=False, profile=profile)
+    corner = np.asarray(canvas)[0:12, 0:12]
+    assert float(np.mean(np.all(corner >= 254, axis=2))) >= 0.95
+
+
+def test_fidelity_skips_color_enhance():
+    rgb, mask = _make_product(fg_color=(50, 55, 60))
+    _, _, report, _ = build_studio_rgba(rgb, mask, model_name="test")
+    assert report.enhance.get("skipped") is True or report.exposure_wb.get("skipped") is True
+    assert "matting" in report.to_dict()
+
+
+def test_optional_shadow_off_by_default():
+    rgb, mask = _make_product()
+    rgba = rgb.convert("RGBA")
+    rgba.putalpha(mask)
+    canvas, _ = compose_white_square(rgba, size=400)
+    arr = np.asarray(canvas)
+    # No synthetic gray shadow blob in the bottom-center canvas when default
+    bottom = arr[-30:, 180:220]
+    # canvas is white + product; bottom strip should stay nearly white
+    assert float(np.mean(bottom)) >= 240.0
+
+
 def test_decontam_and_shadow():
     rgb, mask = _make_product()
     rgba = rgb.convert("RGBA")
@@ -188,6 +227,9 @@ if __name__ == "__main__":
         test_seg_confidence_tiny_mask,
         test_exposure_skips_good_image,
         test_decontam_and_shadow,
+        test_matting_trimap_and_interior_rgb,
+        test_fidelity_skips_color_enhance,
+        test_optional_shadow_off_by_default,
     ]
     failed = 0
     for fn in tests:

@@ -1,5 +1,6 @@
 .env
 .venv/
+.venv-withoutbg/
 venv/
 __pycache__/
 *.pyc
@@ -12,6 +13,10 @@ golden/spike_out/*
 debug/
 debug_qc/
 tmp_test/
+tests/ab_edges/
+tests/ab_extraction/
+tests/ab_alpha_lock/
+tests/ab_adaptive/
 *.log
 .idea/
 .vscode/
